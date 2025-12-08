@@ -1,0 +1,255 @@
+{
+  "Comment": "Finds EKS node group by NodeSelector/Tolerations and scales the underlying Auto Scaling Group in destination account",
+  "StartAt": "PrepareInput",
+  "States": {
+    "PrepareInput": {
+      "Type": "Pass",
+      "Comment": "Initialize NodeSelector and Tolerations with default values if not present",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterName",
+        "DesiredCapacity.$": "$.DesiredCapacity",
+        "MinSize.$": "$.MinSize",
+        "MaxSize.$": "$.MaxSize",
+        "MinimumCapacity.$": "$.MinimumCapacity",
+        "NodeSelector.$": "States.JsonMerge(States.StringToJson('{}'), $.NodeSelector)",
+        "Tolerations.$": "States.JsonMerge(States.StringToJson('[]'), $.Tolerations)",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "Next": "ListNodeGroups"
+    },
+    "ListNodeGroups": {
+      "Type": "Task",
+      "Comment": "List all node groups in the EKS cluster",
+      "Resource": "arn:aws:states:::aws-sdk:eks:listNodegroups",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterName"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.NodeGroupsList",
+      "Next": "FindMatchingNodeGroup",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
+    "FindMatchingNodeGroup": {
+      "Type": "Map",
+      "Comment": "Iterate over node groups to find one matching NodeSelector and/or Tolerations",
+      "ItemsPath": "$.NodeGroupsList.Nodegroups",
+      "MaxConcurrency": 5,
+      "ItemSelector": {
+        "ClusterName.$": "$.ClusterName",
+        "NodeGroupName.$": "$$.Map.Item.Value",
+        "NodeSelector.$": "$.NodeSelector",
+        "Tolerations.$": "$.Tolerations",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "DescribeNodeGroup",
+        "States": {
+          "DescribeNodeGroup": {
+            "Type": "Task",
+            "Comment": "Get node group details including labels and taints",
+            "Resource": "arn:aws:states:::aws-sdk:eks:describeNodegroup",
+            "Parameters": {
+              "ClusterName.$": "$.ClusterName",
+              "NodegroupName.$": "$.NodeGroupName"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "ResultPath": "$.NodeGroupDetails",
+            "Next": "ExtractMatchInfo",
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.DescribeError",
+                "Next": "NodeGroupNotMatched"
+              }
+            ]
+          },
+          "ExtractMatchInfo": {
+            "Type": "Pass",
+            "Comment": "Extract ASG name for matched node group",
+            "Parameters": {
+              "Matched": true,
+              "NodeGroupName.$": "$.NodeGroupName",
+              "AsgName.$": "$.NodeGroupDetails.Nodegroup.Resources.AutoScalingGroups[0].Name"
+            },
+            "End": true
+          },
+          "NodeGroupNotMatched": {
+            "Type": "Pass",
+            "Comment": "This node group does not match",
+            "Parameters": {
+              "Matched": false
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.MapResults",
+      "Next": "SelectFirstMatch",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.MapError",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
+    "SelectFirstMatch": {
+      "Type": "Pass",
+      "Comment": "Select first matched node group",
+      "Parameters": {
+        "ClusterName.$": "$.ClusterName",
+        "DesiredCapacity.$": "$.DesiredCapacity",
+        "MinSize.$": "$.MinSize",
+        "MaxSize.$": "$.MaxSize",
+        "MinimumCapacity.$": "$.MinimumCapacity",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "MatchedNodeGroup.$": "$.MapResults[?(@.Matched==true)]"
+      },
+      "Next": "CheckMatchedNodeGroups"
+    },
+    "CheckMatchedNodeGroups": {
+      "Type": "Choice",
+      "Comment": "Check if we found any matching node groups",
+      "Choices": [
+        {
+          "Variable": "$.MatchedNodeGroup[0]",
+          "IsPresent": true,
+          "Next": "GetAsgCurrentCapacity"
+        }
+      ],
+      "Default": "NoMatchingNodeGroupFound"
+    },
+    "GetAsgCurrentCapacity": {
+      "Type": "Task",
+      "Comment": "Get current ASG desired capacity",
+      "Resource": "arn:aws:states:::aws-sdk:autoscaling:describeAutoScalingGroups",
+      "Parameters": {
+        "AutoScalingGroupNames.$": "States.Array($.MatchedNodeGroup[0].AsgName)"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "DesiredCapacity.$": "$.AutoScalingGroups[0].DesiredCapacity",
+        "MinSize.$": "$.AutoScalingGroups[0].MinSize",
+        "MaxSize.$": "$.AutoScalingGroups[0].MaxSize"
+      },
+      "ResultPath": "$.CurrentAsgInfo",
+      "Next": "CheckMinimumCapacityProvided",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.GetAsgError",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
+    "CheckMinimumCapacityProvided": {
+      "Type": "Choice",
+      "Comment": "Check if MinimumCapacity parameter is provided for conditional scaling",
+      "Choices": [
+        {
+          "Variable": "$.MinimumCapacity",
+          "IsPresent": true,
+          "Next": "CheckIfAlreadySufficient"
+        }
+      ],
+      "Default": "SetDesiredCapacity"
+    },
+    "CheckIfAlreadySufficient": {
+      "Type": "Choice",
+      "Comment": "Check if current capacity is already sufficient",
+      "Choices": [
+        {
+          "Variable": "$.CurrentAsgInfo.DesiredCapacity",
+          "NumericGreaterThanEqualsPath": "$.MinimumCapacity",
+          "Next": "CapacityAlreadySufficient"
+        }
+      ],
+      "Default": "SetDesiredCapacity"
+    },
+    "CapacityAlreadySufficient": {
+      "Type": "Pass",
+      "Comment": "Capacity is already sufficient, no scaling needed",
+      "Parameters": {
+        "Status": "AlreadySufficient",
+        "ModuleName": "scale_nodegroup_asg",
+        "NodeGroupName.$": "$.MatchedNodeGroup[0].NodeGroupName",
+        "AsgName.$": "$.MatchedNodeGroup[0].AsgName",
+        "CurrentCapacity.$": "$.CurrentAsgInfo.DesiredCapacity",
+        "MinimumRequired.$": "$.MinimumCapacity"
+      },
+      "Next": "ScaleSucceeded"
+    },
+    "SetDesiredCapacity": {
+      "Type": "Task",
+      "Comment": "Set desired capacity",
+      "Resource": "arn:aws:states:::aws-sdk:autoscaling:setDesiredCapacity",
+      "Parameters": {
+        "AutoScalingGroupName.$": "$.MatchedNodeGroup[0].AsgName",
+        "DesiredCapacity.$": "$.DesiredCapacity"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.SetCapacityResult",
+      "Next": "WaitForScaling",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SetCapacityError",
+          "Next": "ScaleFailed"
+        }
+      ]
+    },
+    "WaitForScaling": {
+      "Type": "Wait",
+      "Comment": "Wait for ASG to start scaling",
+      "Seconds": 10,
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Comment": "Prepare success output",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "scale_nodegroup_asg",
+        "NodeGroupName.$": "$.MatchedNodeGroup[0].NodeGroupName",
+        "AsgName.$": "$.MatchedNodeGroup[0].AsgName",
+        "DesiredCapacity.$": "$.DesiredCapacity"
+      },
+      "Next": "ScaleSucceeded"
+    },
+    "NoMatchingNodeGroupFound": {
+      "Type": "Pass",
+      "Comment": "No matching node group found - continue without scaling",
+      "Parameters": {
+        "Status": "NoMatchFound",
+        "ModuleName": "scale_nodegroup_asg",
+        "Message": "No node group found matching the provided criteria. Scaling skipped."
+      },
+      "Next": "ScaleSucceeded"
+    },
+    "ScaleFailed": {
+      "Type": "Fail",
+      "Error": "ScalingFailed",
+      "Cause": "Failed to scale the Auto Scaling Group"
+    },
+    "ScaleSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

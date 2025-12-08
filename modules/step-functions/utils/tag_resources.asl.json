@@ -1,0 +1,74 @@
+{
+  "Comment": "Tags a list of AWS resources in destination account, merging source tags with config tags",
+  "StartAt": "CheckSourceTags",
+  "States": {
+    "CheckSourceTags": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.SourceTagList",
+          "IsPresent": true,
+          "Next": "MergeTags"
+        }
+      ],
+      "Default": "PrepareTagsFromConfig"
+    },
+    "PrepareTagsFromConfig": {
+      "Type": "Pass",
+      "Comment": "Use ConfigTags directly when no source tags",
+      "Parameters": {
+        "ResourceARNList.$": "$.ResourceARNList",
+        "Tags.$": "$.ConfigTags",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "Next": "TagResources"
+    },
+    "MergeTags": {
+      "Type": "Pass",
+      "Comment": "Merge source tags with config tags, config tags take precedence",
+      "Parameters": {
+        "ResourceARNList.$": "$.ResourceARNList",
+        "Tags.$": "States.JsonMerge($.SourceTagList, $.ConfigTags)",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "Next": "TagResources"
+    },
+    "TagResources": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+      "Parameters": {
+        "ResourceARNList.$": "$.ResourceARNList",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.TaggingResult",
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "TaggingFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "tag_resources",
+        "ResourceCount.$": "States.ArrayLength($.ResourceARNList)"
+      },
+      "Next": "TaggingSucceeded"
+    },
+    "TaggingFailed": {
+      "Type": "Fail",
+      "Error": "TaggingFailed",
+      "Cause": "Failed to tag resources"
+    },
+    "TaggingSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

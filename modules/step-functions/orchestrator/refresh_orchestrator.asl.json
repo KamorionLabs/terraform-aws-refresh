@@ -1,0 +1,509 @@
+{
+  "Comment": "Cross-Account Refresh Orchestrator - Orchestrates database and EFS refresh from source to destination account",
+  "StartAt": "LoadConfiguration",
+  "States": {
+    "LoadConfiguration": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ConfigS3Path",
+          "IsPresent": true,
+          "Next": "LoadConfigFromS3"
+        }
+      ],
+      "Default": "PrepareRefresh"
+    },
+    "LoadConfigFromS3": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:s3:getObject",
+      "Parameters": {
+        "Bucket.$": "$.ConfigS3Bucket",
+        "Key.$": "$.ConfigS3Path"
+      },
+      "ResultSelector": {
+        "config.$": "States.StringToJson($.Body)"
+      },
+      "OutputPath": "$.config",
+      "Next": "PrepareRefresh",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ConfigLoadFailed"
+        }
+      ]
+    },
+    "PrepareRefresh": {
+      "Type": "Task",
+      "Comment": "Prepare resource names and retrieve current tags from destination account",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.PrepareRefresh",
+        "Input": {
+          "Database.$": "$.Database",
+          "EFS.$": "$.EFS",
+          "Tags.$": "$.Tags",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultSelector": {
+        "ResourceNames.$": "$.Output.ResourceNames",
+        "CurrentDatabaseTags.$": "$.Output.CurrentDatabaseTags",
+        "CurrentEfsTags.$": "$.Output.CurrentEfsTags",
+        "OldEfsFileSystemId.$": "$.Output.OldEfsFileSystemId"
+      },
+      "ResultPath": "$.PrepareResult",
+      "Next": "MergePrepareResults",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.PrepareError",
+          "Next": "Phase1DataRefresh"
+        }
+      ]
+    },
+    "MergePrepareResults": {
+      "Type": "Pass",
+      "Parameters": {
+        "Database.$": "$.Database",
+        "EFS.$": "$.EFS",
+        "EKS.$": "$.EKS",
+        "Tags.$": "$.Tags",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "StepFunctions.$": "$.StepFunctions",
+        "Notifications.$": "$.Notifications",
+        "ResourceNames.$": "$.PrepareResult.ResourceNames",
+        "CurrentDatabaseTags.$": "$.PrepareResult.CurrentDatabaseTags",
+        "CurrentEfsTags.$": "$.PrepareResult.CurrentEfsTags",
+        "OldEfsFileSystemId.$": "$.PrepareResult.OldEfsFileSystemId"
+      },
+      "Next": "Phase1DataRefresh"
+    },
+    "Phase1DataRefresh": {
+      "Type": "Parallel",
+      "Comment": "Phase 1: Restore database and EFS in parallel",
+      "Branches": [
+        {
+          "StartAt": "EnsureRestoreClusterNotExists",
+          "States": {
+            "EnsureRestoreClusterNotExists": {
+              "Type": "Task",
+              "Comment": "Clean up any leftover -restore cluster from failed refresh",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.CleanupResult",
+              "Next": "RestoreDatabase",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.CleanupError",
+                  "Next": "RestoreDatabase"
+                }
+              ]
+            },
+            "RestoreDatabase": {
+              "Type": "Task",
+              "Comment": "Restore database from source snapshot to destination account",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.RestoreCluster",
+                "Input": {
+                  "SourceDBClusterIdentifier.$": "$.Database.Source.ClusterIdentifier",
+                  "TmpDbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbInstanceClass.$": "$.Database.Target.InstanceClass",
+                  "DbSubnetGroupName.$": "$.Database.Network.SubnetGroupName",
+                  "VpcSecurityGroupIds.$": "$.Database.Network.SecurityGroupIds",
+                  "KmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+                  "SourceAccount.$": "$.SourceAccount",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.RestoreResult",
+              "Next": "CreateDBInstance",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "DatabaseRefreshFailed"
+                }
+              ]
+            },
+            "CreateDBInstance": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.CreateInstance",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "DbInstanceIdentifierPrefix.$": "$.ResourceNames.TmpInstanceIdentifierPrefix",
+                  "DbInstances.$": "$.Database.Target.Instances",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.CreateInstanceResult",
+              "Next": "EnableMasterSecret",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "DatabaseRefreshFailed"
+                }
+              ]
+            },
+            "EnableMasterSecret": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.EnableMasterSecret",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "MasterUserSecretKmsKeyId.$": "$.Database.Secrets.KmsKeyId",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.EnableSecretResult",
+              "Next": "ConfigureS3Integration",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "DatabaseRefreshFailed"
+                }
+              ]
+            },
+            "ConfigureS3Integration": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.ConfigureS3Integration",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+                  "RoleArn.$": "$.Database.S3Integration.RoleArn",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.S3IntegrationResult",
+              "Next": "DatabaseRefreshComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.S3Error",
+                  "Next": "DatabaseRefreshComplete"
+                }
+              ]
+            },
+            "DatabaseRefreshComplete": {
+              "Type": "Succeed"
+            },
+            "DatabaseRefreshFailed": {
+              "Type": "Fail",
+              "Error": "DatabaseRestoreFailed",
+              "Cause": "Database restore process failed"
+            }
+          }
+        },
+        {
+          "StartAt": "CheckEFSEnabled",
+          "States": {
+            "CheckEFSEnabled": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Enabled", "IsPresent": true},
+                    {"Variable": "$.EFS.Enabled", "BooleanEquals": false}
+                  ],
+                  "Next": "EFSRefreshComplete"
+                }
+              ],
+              "Default": "RestoreEFS"
+            },
+            "RestoreEFS": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.RestoreFromBackup",
+                "Input": {
+                  "SourceEFSName.$": "$.EFS.Source",
+                  "AWSBackupRoleArn.$": "$.EFS.Backup.RoleArn",
+                  "Encrypted": "true",
+                  "KmsKeyId.$": "$.EFS.Security.KmsKeyId",
+                  "NewFileSystem": "true",
+                  "ItemsToRestore.$": "$.EFS.Backup.ItemsToRestore",
+                  "Tags.$": "$.Tags",
+                  "SourceAccount.$": "$.SourceAccount",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.EfsRestoreResult",
+              "Next": "CreateEFSMountTargets",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "CreateEFSMountTargets": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.CreateFilesystem",
+                "Input": {
+                  "FileSystemId.$": "$.EfsRestoreResult.Output.FileSystemId",
+                  "SubnetIds.$": "$.EFS.Network.SubnetIds",
+                  "SecurityGroupIds.$": "$.EFS.Network.SecurityGroupIds",
+                  "LifecyclePolicies.$": "$.EFS.Lifecycle",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.EfsConfigureResult",
+              "Next": "EFSRefreshComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "EFSRefreshFailed"
+                }
+              ]
+            },
+            "EFSRefreshComplete": {
+              "Type": "Succeed"
+            },
+            "EFSRefreshFailed": {
+              "Type": "Fail",
+              "Error": "EFSRefreshFailed",
+              "Cause": "EFS restore process failed"
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.Phase1Results",
+      "Next": "Phase2ClusterSwitch",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Phase1Error",
+          "Next": "SendFailureNotification"
+        }
+      ]
+    },
+    "Phase2ClusterSwitch": {
+      "Type": "Pass",
+      "Comment": "Phase 2: Switch clusters (rename old to -old, rename new to target)",
+      "Next": "CheckRenameOldClusterOption"
+    },
+    "CheckRenameOldClusterOption": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Database.Options.RenameOldCluster",
+          "BooleanEquals": true,
+          "Next": "EnsureOldClusterNotExists"
+        }
+      ],
+      "Default": "RenameNewCluster"
+    },
+    "EnsureOldClusterNotExists": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.EnsureClusterNotExists",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.EnsureOldNotExistsResult",
+      "Next": "RenameOldCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EnsureOldError",
+          "Next": "RenameNewCluster"
+        }
+      ]
+    },
+    "RenameOldCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RenameCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "NewDbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+          "NewInstanceIdentifierPrefix.$": "$.ResourceNames.OldInstanceIdentifierPrefix",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.RenameOldResult",
+      "Next": "RenameNewCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.RenameOldError",
+          "Next": "RenameNewCluster"
+        }
+      ]
+    },
+    "RenameNewCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RenameCluster",
+        "Input": {
+          "DbClusterIdentifier.$": "$.ResourceNames.TmpDbClusterIdentifier",
+          "NewDbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "NewInstanceIdentifierPrefix.$": "$.Database.Target.InstanceIdentifierPrefix",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.RenameNewResult",
+      "Next": "CheckRotateSecretsOption",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.RenameNewError",
+          "Next": "SendFailureNotification"
+        }
+      ]
+    },
+    "CheckRotateSecretsOption": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Database.Options.RotateSecrets",
+          "BooleanEquals": true,
+          "Next": "RotateDatabaseSecrets"
+        }
+      ],
+      "Default": "Phase3Cleanup"
+    },
+    "RotateDatabaseSecrets": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Database.RotateSecrets",
+        "Input": {
+          "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+          "DatabaseUsersSecrets.$": "$.Database.Secrets.UserSecrets",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.RotateSecretsResult",
+      "Next": "Phase3Cleanup",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.RotateSecretsError",
+          "Next": "Phase3Cleanup"
+        }
+      ]
+    },
+    "Phase3Cleanup": {
+      "Type": "Task",
+      "Comment": "Phase 3: Cleanup old resources and send notifications",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.CleanupAndStop",
+        "Input": {
+          "Database.$": "$.Database",
+          "EFS.$": "$.EFS",
+          "EKS.$": "$.EKS",
+          "ResourceNames.$": "$.ResourceNames",
+          "RenameNewResult.$": "$.RenameNewResult",
+          "CurrentDatabaseTags.$": "$.CurrentDatabaseTags",
+          "CurrentEfsTags.$": "$.CurrentEfsTags",
+          "OldEfsFileSystemId.$": "$.OldEfsFileSystemId",
+          "StepFunctions.$": "$.StepFunctions",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.CleanupResult",
+      "Next": "SendSuccessNotification",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CleanupError",
+          "Next": "SendSuccessNotification"
+        }
+      ]
+    },
+    "SendSuccessNotification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.Notify",
+        "Input": {
+          "DynamoDBTableName.$": "$.Notifications.DynamoDB.TableName",
+          "Item": {
+            "ExecutionId": {"S.$": "$$.Execution.Id"},
+            "Timestamp": {"S.$": "$$.State.EnteredTime"},
+            "Status": {"S": "COMPLETED"}
+          },
+          "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
+          "SNSSubject": "Refresh Completed Successfully",
+          "SNSMessage.$": "States.Format('Database refresh completed for {}', $.Database.Target.ClusterIdentifier)"
+        }
+      },
+      "ResultPath": null,
+      "Next": "RefreshComplete",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.NotifyError",
+          "Next": "RefreshComplete"
+        }
+      ]
+    },
+    "SendFailureNotification": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "StateMachineArn.$": "$.StepFunctions.Utils.Notify",
+        "Input": {
+          "DynamoDBTableName.$": "$.Notifications.DynamoDB.TableName",
+          "Item": {
+            "ExecutionId": {"S.$": "$$.Execution.Id"},
+            "Timestamp": {"S.$": "$$.State.EnteredTime"},
+            "Status": {"S": "FAILED"},
+            "Error": {"S.$": "States.JsonToString($.Phase1Error)"}
+          },
+          "SNSTopicArn.$": "$.Notifications.SNS.TopicArn",
+          "SNSSubject": "Refresh Failed",
+          "SNSMessage.$": "States.Format('Database refresh FAILED for {}', $.Database.Target.ClusterIdentifier)"
+        }
+      },
+      "ResultPath": null,
+      "Next": "RefreshFailed",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.NotifyError",
+          "Next": "RefreshFailed"
+        }
+      ]
+    },
+    "ConfigLoadFailed": {
+      "Type": "Fail",
+      "Error": "ConfigLoadFailed",
+      "Cause": "Failed to load configuration from S3"
+    },
+    "RefreshFailed": {
+      "Type": "Fail",
+      "Error": "RefreshFailed",
+      "Cause": "The refresh process encountered an error"
+    },
+    "RefreshComplete": {
+      "Type": "Succeed"
+    }
+  }
+}

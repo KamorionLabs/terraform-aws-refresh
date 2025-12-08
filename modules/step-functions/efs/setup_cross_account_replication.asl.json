@@ -1,0 +1,174 @@
+{
+  "Comment": "Sets up EFS cross-account replication from source account to destination account",
+  "StartAt": "GetSourceFileSystem",
+  "States": {
+    "GetSourceFileSystem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "FileSystemId.$": "$.FileSystems[0].FileSystemId",
+        "FileSystemArn.$": "$.FileSystems[0].FileSystemArn"
+      },
+      "ResultPath": "$.SourceEFS",
+      "Next": "CheckExistingReplication",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "CheckExistingReplication": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.ExistingReplication",
+      "Next": "HasExistingReplication",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CheckError",
+          "Next": "CreateDestinationFileSystem"
+        }
+      ]
+    },
+    "HasExistingReplication": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ExistingReplication.Replications[0]",
+          "IsPresent": true,
+          "Next": "ReplicationAlreadyExists"
+        }
+      ],
+      "Default": "CreateDestinationFileSystem"
+    },
+    "ReplicationAlreadyExists": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "AlreadyExists",
+        "ModuleName": "setup_cross_account_replication",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.ExistingReplication.Replications[0].Destinations[0].FileSystemId",
+        "Message": "Replication configuration already exists"
+      },
+      "Next": "SetupSucceeded"
+    },
+    "CreateDestinationFileSystem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:createFileSystem",
+      "Parameters": {
+        "CreationToken.$": "States.UUID()",
+        "PerformanceMode.$": "$.PerformanceMode",
+        "Encrypted.$": "$.Encrypted",
+        "KmsKeyId.$": "$.DestinationKmsKeyId",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.DestinationEFS",
+      "Next": "WaitDestinationAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CreateError",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "WaitDestinationAvailable": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckDestinationStatus"
+    },
+    "CheckDestinationStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {
+        "FileSystemId.$": "$.DestinationEFS.FileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.DestinationStatus",
+      "Next": "IsDestinationAvailable"
+    },
+    "IsDestinationAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.DestinationStatus.FileSystems[0].LifeCycleState",
+          "StringEquals": "available",
+          "Next": "CreateReplicationConfiguration"
+        }
+      ],
+      "Default": "WaitDestinationAvailable"
+    },
+    "CreateReplicationConfiguration": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:createReplicationConfiguration",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "Destinations": [
+          {
+            "Region.$": "$.DestinationRegion",
+            "FileSystemId.$": "$.DestinationEFS.FileSystemId",
+            "KmsKeyId.$": "$.DestinationKmsKeyId"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.ReplicationConfig",
+      "Next": "PrepareOutput",
+      "Retry": [
+        {
+          "ErrorEquals": ["EFS.ReplicationNotFound", "EFS.FileSystemNotFound"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.ReplicationError",
+          "Next": "SetupFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "setup_cross_account_replication",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationEFS.FileSystemId",
+        "DestinationFileSystemArn.$": "$.DestinationEFS.FileSystemArn"
+      },
+      "Next": "SetupSucceeded"
+    },
+    "SetupFailed": {
+      "Type": "Fail",
+      "Error": "SetupReplicationFailed",
+      "Cause": "Failed to setup cross-account EFS replication"
+    },
+    "SetupSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

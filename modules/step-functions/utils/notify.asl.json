@@ -1,0 +1,88 @@
+{
+  "Comment": "Utility module to update DynamoDB and send SNS notification in orchestrator account",
+  "StartAt": "PrepareNotification",
+  "States": {
+    "PrepareNotification": {
+      "Type": "Pass",
+      "Parameters": {
+        "DynamoDBTableName.$": "$.DynamoDBTableName",
+        "Item.$": "$.Item",
+        "SNSTopicArn.$": "$.SNSTopicArn",
+        "SNSSubject.$": "$.SNSSubject",
+        "SNSMessage.$": "$.SNSMessage"
+      },
+      "ResultPath": "$.NotificationData",
+      "Next": "UpdateDynamoDB"
+    },
+    "UpdateDynamoDB": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:putItem",
+      "Parameters": {
+        "TableName.$": "$.NotificationData.DynamoDBTableName",
+        "Item.$": "$.NotificationData.Item"
+      },
+      "ResultPath": "$.DynamoResult",
+      "Next": "ShouldSendSns",
+      "Retry": [
+        {
+          "ErrorEquals": ["DynamoDB.ProvisionedThroughputExceededException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DynamoError",
+          "Next": "ShouldSendSns"
+        }
+      ]
+    },
+    "ShouldSendSns": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.NotificationData.SNSTopicArn",
+          "IsPresent": true,
+          "Next": "SendSnsMessage"
+        }
+      ],
+      "Default": "PrepareOutput"
+    },
+    "SendSnsMessage": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn.$": "$.NotificationData.SNSTopicArn",
+        "Subject.$": "$.NotificationData.SNSSubject",
+        "Message.$": "$.NotificationData.SNSMessage"
+      },
+      "ResultPath": null,
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SNSError",
+          "Next": "NotificationFailed"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "notify"
+      },
+      "Next": "NotificationSucceeded"
+    },
+    "NotificationFailed": {
+      "Type": "Fail",
+      "Error": "NotificationFailed",
+      "Cause": "Failed to send notification"
+    },
+    "NotificationSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

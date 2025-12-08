@@ -1,0 +1,196 @@
+{
+  "Comment": "Creates an EFS file system in the destination account with lifecycle policies and mount targets",
+  "StartAt": "CreateFileSystem",
+  "States": {
+    "CreateFileSystem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:createFileSystem",
+      "Parameters": {
+        "CreationToken.$": "States.UUID()",
+        "PerformanceMode.$": "$.PerformanceMode",
+        "Encrypted.$": "$.Encrypted",
+        "KmsKeyId.$": "$.KmsKeyId",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.CreatedFileSystem",
+      "Next": "WaitFileSystemAvailable",
+      "Retry": [
+        {
+          "ErrorEquals": ["EFS.FileSystemAlreadyExists"],
+          "MaxAttempts": 0
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CreateFailed"
+        }
+      ]
+    },
+    "WaitFileSystemAvailable": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "DescribeFileSystem"
+    },
+    "DescribeFileSystem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {
+        "FileSystemId.$": "$.CreatedFileSystem.FileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.FileSystemStatus",
+      "Next": "IsFileSystemAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "WaitFileSystemAvailable"
+        }
+      ]
+    },
+    "IsFileSystemAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.FileSystemStatus.FileSystems[0].LifeCycleState",
+          "StringEquals": "available",
+          "Next": "PutLifecycleConfiguration"
+        }
+      ],
+      "Default": "WaitFileSystemAvailable"
+    },
+    "PutLifecycleConfiguration": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:putLifecycleConfiguration",
+      "Parameters": {
+        "FileSystemId.$": "$.CreatedFileSystem.FileSystemId",
+        "LifecyclePolicies.$": "$.LifecyclePolicies"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "CreateMountTargets",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.LifecycleError",
+          "Next": "CreateMountTargets"
+        }
+      ]
+    },
+    "CreateMountTargets": {
+      "Type": "Map",
+      "ItemsPath": "$.SubnetIds",
+      "MaxConcurrency": 3,
+      "ItemSelector": {
+        "FileSystemId.$": "$.CreatedFileSystem.FileSystemId",
+        "SubnetId.$": "$$.Map.Item.Value",
+        "SecurityGroups.$": "$.SecurityGroupIds",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "CreateMountTarget",
+        "States": {
+          "CreateMountTarget": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:efs:createMountTarget",
+            "Parameters": {
+              "FileSystemId.$": "$.FileSystemId",
+              "SubnetId.$": "$.SubnetId",
+              "SecurityGroups.$": "$.SecurityGroups"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "End": true,
+            "Retry": [
+              {
+                "ErrorEquals": ["EFS.MountTargetConflict"],
+                "MaxAttempts": 0
+              },
+              {
+                "ErrorEquals": ["States.ALL"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ]
+          }
+        }
+      },
+      "ResultPath": "$.MountTargetsResult",
+      "Next": "WaitMountTargetsAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.MountTargetsError",
+          "Next": "WaitMountTargetsAvailable"
+        }
+      ]
+    },
+    "WaitMountTargetsAvailable": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "DescribeMountTargets"
+    },
+    "DescribeMountTargets": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeMountTargets",
+      "Parameters": {
+        "FileSystemId.$": "$.CreatedFileSystem.FileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.MountTargetsStatus",
+      "Next": "AreMountTargetsAvailable"
+    },
+    "AreMountTargetsAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.MountTargetsStatus.MountTargets[0].LifeCycleState",
+          "StringEquals": "available",
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "WaitMountTargetsAvailable"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "create_filesystem",
+        "FileSystemId.$": "$.CreatedFileSystem.FileSystemId",
+        "FileSystemArn.$": "$.CreatedFileSystem.FileSystemArn",
+        "MountTargetCount.$": "States.ArrayLength($.MountTargetsStatus.MountTargets)"
+      },
+      "Next": "CreateSucceeded"
+    },
+    "CreateFailed": {
+      "Type": "Fail",
+      "Error": "CreateFileSystemFailed",
+      "Cause": "Failed to create EFS file system"
+    },
+    "CreateSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

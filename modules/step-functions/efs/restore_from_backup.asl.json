@@ -1,0 +1,177 @@
+{
+  "Comment": "Restores an EFS file system from the latest AWS Backup recovery point in destination account",
+  "StartAt": "GetSourceEFSInfo",
+  "States": {
+    "GetSourceEFSInfo": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {},
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.SourceFileSystems",
+      "Next": "ExtractSourceEFS",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "RestoreFailed"
+        }
+      ]
+    },
+    "ExtractSourceEFS": {
+      "Type": "Pass",
+      "Parameters": {
+        "FileSystemArn.$": "States.ArrayGetItem($.SourceFileSystems.FileSystems[?(@.Name==$.SourceEFSName)].FileSystemArn, 0)",
+        "FileSystemId.$": "States.ArrayGetItem($.SourceFileSystems.FileSystems[?(@.Name==$.SourceEFSName)].FileSystemId, 0)"
+      },
+      "ResultPath": "$.SourceEFS",
+      "Next": "GetLatestRecoveryPoint"
+    },
+    "GetLatestRecoveryPoint": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:backup:listRecoveryPointsByResource",
+      "Parameters": {
+        "ResourceArn.$": "$.SourceEFS.FileSystemArn"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "RecoveryPointArn.$": "$.RecoveryPoints[0].RecoveryPointArn"
+      },
+      "ResultPath": "$.RecoveryPoint",
+      "Next": "StartRestoreJob",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "RestoreFailed"
+        }
+      ]
+    },
+    "StartRestoreJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:backup:startRestoreJob",
+      "Parameters": {
+        "RecoveryPointArn.$": "$.RecoveryPoint.RecoveryPointArn",
+        "IamRoleArn.$": "$.AWSBackupRoleArn",
+        "Metadata": {
+          "file-system-id.$": "$.SourceEFS.FileSystemId",
+          "Encrypted.$": "$.Encrypted",
+          "KmsKeyId.$": "$.KmsKeyId",
+          "PerformanceMode": "generalPurpose",
+          "newFileSystem.$": "$.NewFileSystem",
+          "ItemsToRestore.$": "$.ItemsToRestore",
+          "CreationToken.$": "States.UUID()"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.RestoreJob",
+      "Next": "WaitRestoreDone",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "RestoreFailed"
+        }
+      ]
+    },
+    "WaitRestoreDone": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "GetRestoreStatus"
+    },
+    "GetRestoreStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:backup:describeRestoreJob",
+      "Parameters": {
+        "RestoreJobId.$": "$.RestoreJob.RestoreJobId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.RestoreStatus",
+      "Next": "IsRestoreCompleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.StatusError",
+          "Next": "WaitRestoreDone"
+        }
+      ]
+    },
+    "IsRestoreCompleted": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.RestoreStatus.Status",
+          "StringEquals": "COMPLETED",
+          "Next": "FormatRestoredEFS"
+        },
+        {
+          "Variable": "$.RestoreStatus.Status",
+          "StringEquals": "FAILED",
+          "Next": "RestoreFailed"
+        },
+        {
+          "Variable": "$.RestoreStatus.Status",
+          "StringEquals": "ABORTED",
+          "Next": "RestoreFailed"
+        }
+      ],
+      "Default": "WaitRestoreDone"
+    },
+    "FormatRestoredEFS": {
+      "Type": "Pass",
+      "Parameters": {
+        "FileSystemArn.$": "$.RestoreStatus.CreatedResourceArn",
+        "FileSystemId.$": "States.ArrayGetItem(States.StringSplit($.RestoreStatus.CreatedResourceArn, '/'), 1)",
+        "SourceFileSystemId.$": "$.SourceEFS.FileSystemId"
+      },
+      "ResultPath": "$.RestoredEFS",
+      "Next": "TagRestoredEFS"
+    },
+    "TagRestoredEFS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+      "Parameters": {
+        "ResourceARNList.$": "States.Array($.RestoredEFS.FileSystemArn)",
+        "Tags.$": "$.Tags"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.TagError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "restore_from_backup",
+        "FileSystemId.$": "$.RestoredEFS.FileSystemId",
+        "FileSystemArn.$": "$.RestoredEFS.FileSystemArn",
+        "SourceFileSystemId.$": "$.RestoredEFS.SourceFileSystemId"
+      },
+      "Next": "RestoreSucceeded"
+    },
+    "RestoreFailed": {
+      "Type": "Fail",
+      "Error": "RestoreFailed",
+      "Cause": "EFS restore from backup failed"
+    },
+    "RestoreSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

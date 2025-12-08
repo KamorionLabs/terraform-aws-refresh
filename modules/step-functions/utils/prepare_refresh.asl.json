@@ -1,0 +1,132 @@
+{
+  "Comment": "Prepares all necessary metadata for refresh: generates resource names, retrieves current tags from destination account",
+  "StartAt": "GenerateResourceNames",
+  "States": {
+    "GenerateResourceNames": {
+      "Type": "Pass",
+      "Parameters": {
+        "TmpDbClusterIdentifier.$": "States.Format('{}-restore', $.Database.Target.ClusterIdentifier)",
+        "OldDbClusterIdentifier.$": "States.Format('{}-old', $.Database.Target.ClusterIdentifier)",
+        "TmpInstanceIdentifierPrefix.$": "States.Format('{}-restore', $.Database.Target.InstanceIdentifierPrefix)",
+        "OldInstanceIdentifierPrefix.$": "States.Format('{}-old', $.Database.Target.InstanceIdentifierPrefix)"
+      },
+      "ResultPath": "$.ResourceNames",
+      "Next": "GetCurrentDatabaseTags"
+    },
+    "GetCurrentDatabaseTags": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "TagList.$": "$.DbClusters[0].TagList"
+      },
+      "ResultPath": "$.CurrentDatabaseTags",
+      "Next": "CheckEFSEnabled",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": null,
+          "Next": "SetEmptyDatabaseTags"
+        }
+      ]
+    },
+    "SetEmptyDatabaseTags": {
+      "Type": "Pass",
+      "Comment": "Database doesn't exist yet - set empty tags",
+      "Result": {
+        "TagList": []
+      },
+      "ResultPath": "$.CurrentDatabaseTags",
+      "Next": "CheckEFSEnabled"
+    },
+    "CheckEFSEnabled": {
+      "Type": "Choice",
+      "Comment": "Check if EFS refresh is enabled",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EFS.Enabled",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.EFS.Enabled",
+              "BooleanEquals": false
+            }
+          ],
+          "Next": "SetEmptyEFSTags"
+        }
+      ],
+      "Default": "GetCurrentEFSInfo"
+    },
+    "SetEmptyEFSTags": {
+      "Type": "Pass",
+      "Comment": "EFS is disabled - set empty tags",
+      "Result": {
+        "Tags": [],
+        "FileSystemId": null,
+        "FileSystemArn": null
+      },
+      "ResultPath": "$.CurrentEfsTags",
+      "Next": "PrepareOutput"
+    },
+    "GetCurrentEFSInfo": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeFileSystems",
+      "Parameters": {},
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.AllFileSystems",
+      "Next": "ExtractCurrentEFSTags",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": null,
+          "Next": "SetEmptyEFSInfo"
+        }
+      ]
+    },
+    "SetEmptyEFSInfo": {
+      "Type": "Pass",
+      "Comment": "EFS doesn't exist yet - set empty info",
+      "Result": {
+        "Tags": [],
+        "FileSystemId": null,
+        "FileSystemArn": null
+      },
+      "ResultPath": "$.CurrentEfsTags",
+      "Next": "PrepareOutput"
+    },
+    "ExtractCurrentEFSTags": {
+      "Type": "Pass",
+      "Parameters": {
+        "Tags.$": "States.ArrayGetItem($.AllFileSystems.FileSystems[?(@.Name==$.EFS.Name)].Tags, 0)",
+        "FileSystemId.$": "States.ArrayGetItem($.AllFileSystems.FileSystems[?(@.Name==$.EFS.Name)].FileSystemId, 0)",
+        "FileSystemArn.$": "States.ArrayGetItem($.AllFileSystems.FileSystems[?(@.Name==$.EFS.Name)].FileSystemArn, 0)"
+      },
+      "ResultPath": "$.CurrentEfsTags",
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "prepare_refresh",
+        "ResourceNames.$": "$.ResourceNames",
+        "CurrentDatabaseTags.$": "$.CurrentDatabaseTags",
+        "CurrentEfsTags.$": "$.CurrentEfsTags",
+        "OldEfsFileSystemId.$": "$.CurrentEfsTags.FileSystemId"
+      },
+      "Next": "PrepareSucceeded"
+    },
+    "PrepareSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

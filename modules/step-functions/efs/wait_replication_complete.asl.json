@@ -1,0 +1,122 @@
+{
+  "Comment": "Waits for EFS cross-account replication to complete initial sync",
+  "StartAt": "GetReplicationStatus",
+  "States": {
+    "GetReplicationStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.ReplicationStatus",
+      "Next": "CheckReplicationState",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "WaitFailed"
+        }
+      ]
+    },
+    "CheckReplicationState": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "ENABLED",
+          "Next": "CheckLastSyncTime"
+        },
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "ERROR",
+          "Next": "ReplicationError"
+        },
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "DELETING",
+          "Next": "ReplicationError"
+        }
+      ],
+      "Default": "WaitForReplication"
+    },
+    "CheckLastSyncTime": {
+      "Type": "Choice",
+      "Comment": "Check if initial sync has completed by verifying LastReplicatedTimestamp exists",
+      "Choices": [
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp",
+          "IsPresent": true,
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "WaitForReplication"
+    },
+    "WaitForReplication": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "IncrementCounter"
+    },
+    "IncrementCounter": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "WaitCount.$": "States.MathAdd($.WaitCount, 1)",
+        "MaxWaitCount.$": "$.MaxWaitCount"
+      },
+      "Next": "CheckTimeout"
+    },
+    "CheckTimeout": {
+      "Type": "Choice",
+      "Comment": "Check if we've exceeded maximum wait iterations (default 60 = ~1 hour)",
+      "Choices": [
+        {
+          "Variable": "$.WaitCount",
+          "NumericGreaterThanPath": "$.MaxWaitCount",
+          "Next": "TimeoutReached"
+        }
+      ],
+      "Default": "GetReplicationStatus"
+    },
+    "TimeoutReached": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Timeout",
+        "ModuleName": "wait_replication_complete",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "Message": "Replication wait timeout - initial sync may still be in progress"
+      },
+      "Next": "WaitSucceeded"
+    },
+    "ReplicationError": {
+      "Type": "Fail",
+      "Error": "ReplicationError",
+      "Cause": "EFS replication is in error or deleting state"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "wait_replication_complete",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.ReplicationStatus.Replications[0].Destinations[0].FileSystemId",
+        "LastReplicatedTimestamp.$": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp"
+      },
+      "Next": "WaitSucceeded"
+    },
+    "WaitFailed": {
+      "Type": "Fail",
+      "Error": "WaitReplicationFailed",
+      "Cause": "Failed to check replication status"
+    },
+    "WaitSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

@@ -1,0 +1,275 @@
+{
+  "Comment": "Cleanup and stop resources after refresh in destination account: old/new clusters, EFS, nodegroup",
+  "StartAt": "ParallelCleanup",
+  "States": {
+    "ParallelCleanup": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "Comment": "Branch 1: Old Cluster Cleanup",
+          "StartAt": "CheckOldClusterAction",
+          "States": {
+            "CheckOldClusterAction": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Database.Options.DeleteOldCluster",
+                  "BooleanEquals": true,
+                  "Next": "DeleteOldCluster"
+                }
+              ],
+              "Default": "StopOldCluster"
+            },
+            "DeleteOldCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.DeleteClusterResult",
+              "Next": "OldClusterCleanupComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "OldClusterCleanupComplete"
+                }
+              ]
+            },
+            "StopOldCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.StopCluster",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.ResourceNames.OldDbClusterIdentifier",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.StopResult",
+              "Next": "OldClusterCleanupComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "OldClusterCleanupComplete"
+                }
+              ]
+            },
+            "OldClusterCleanupComplete": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch 2: Tag and Stop New Cluster",
+          "StartAt": "TagDatabaseCluster",
+          "States": {
+            "TagDatabaseCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Utils.TagResources",
+                "Input": {
+                  "ResourceARNList.$": "States.Array($.RenameNewResult.Output.DbClusterArn)",
+                  "SourceTagList.$": "$.CurrentDatabaseTags.TagList",
+                  "ConfigTags.$": "$.MergedDatabaseTags",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.TagClusterResult",
+              "Next": "CheckNewClusterAction",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.TagError",
+                  "Next": "CheckNewClusterAction"
+                }
+              ]
+            },
+            "CheckNewClusterAction": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.DeleteNewCluster", "IsPresent": true},
+                    {"Variable": "$.Database.Options.DeleteNewCluster", "BooleanEquals": true}
+                  ],
+                  "Next": "DeleteNewCluster"
+                },
+                {
+                  "And": [
+                    {"Variable": "$.Database.Options.StopClusterAtEnd", "IsPresent": true},
+                    {"Variable": "$.Database.Options.StopClusterAtEnd", "BooleanEquals": true}
+                  ],
+                  "Next": "StopNewCluster"
+                }
+              ],
+              "Default": "NewClusterCleanupComplete"
+            },
+            "StopNewCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.StopCluster",
+                "Input": {
+                  "ClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.StopNewClusterResult",
+              "Next": "NewClusterCleanupComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.StopNewClusterError",
+                  "Next": "NewClusterCleanupComplete"
+                }
+              ]
+            },
+            "DeleteNewCluster": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.Database.DeleteCluster",
+                "Input": {
+                  "DbClusterIdentifier.$": "$.Database.Target.ClusterIdentifier",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.DeleteNewClusterResult",
+              "Next": "NewClusterCleanupComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.DeleteNewClusterError",
+                  "Next": "NewClusterCleanupComplete"
+                }
+              ]
+            },
+            "NewClusterCleanupComplete": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch 3: EFS Cleanup",
+          "StartAt": "CheckEFSEnabled",
+          "States": {
+            "CheckEFSEnabled": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Enabled", "IsPresent": true},
+                    {"Variable": "$.EFS.Enabled", "BooleanEquals": false}
+                  ],
+                  "Next": "EFSCleanupComplete"
+                }
+              ],
+              "Default": "CheckDeleteOldEFSOption"
+            },
+            "CheckDeleteOldEFSOption": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EFS.Options.DeleteOldEfs", "BooleanEquals": true},
+                    {"Variable": "$.OldEfsFileSystemId", "IsPresent": true},
+                    {"Variable": "$.OldEfsFileSystemId", "IsNull": false}
+                  ],
+                  "Next": "DeleteOldEFS"
+                }
+              ],
+              "Default": "EFSCleanupComplete"
+            },
+            "DeleteOldEFS": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EFS.DeleteFilesystem",
+                "Input": {
+                  "FileSystemId.$": "$.OldEfsFileSystemId",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.DeleteEfsResult",
+              "Next": "EFSCleanupComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.DeleteEfsError",
+                  "Next": "EFSCleanupComplete"
+                }
+              ]
+            },
+            "EFSCleanupComplete": {
+              "Type": "Succeed"
+            }
+          }
+        },
+        {
+          "Comment": "Branch 4: Scale Down Nodegroup",
+          "StartAt": "CheckScaleDownOption",
+          "States": {
+            "CheckScaleDownOption": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "And": [
+                    {"Variable": "$.EKS.Scaling.ScaleDownAtEnd", "IsPresent": true},
+                    {"Variable": "$.EKS.Scaling.ScaleDownAtEnd", "BooleanEquals": true}
+                  ],
+                  "Next": "ScaleDownNodegroup"
+                }
+              ],
+              "Default": "NodegroupCleanupComplete"
+            },
+            "ScaleDownNodegroup": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::states:startExecution.sync:2",
+              "Parameters": {
+                "StateMachineArn.$": "$.StepFunctions.EKS.ScaleNodegroupAsg",
+                "Input": {
+                  "ClusterName.$": "$.EKS.ClusterName",
+                  "Tolerations.$": "$.EKS.Tolerations",
+                  "DesiredCapacity.$": "$.EKS.Scaling.FinalCapacity",
+                  "DestinationAccount.$": "$.DestinationAccount"
+                }
+              },
+              "ResultPath": "$.ScaleDownResult",
+              "Next": "NodegroupCleanupComplete",
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.ScaleDownError",
+                  "Next": "NodegroupCleanupComplete"
+                }
+              ]
+            },
+            "NodegroupCleanupComplete": {
+              "Type": "Succeed"
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "cleanup_and_stop"
+      },
+      "Next": "CleanupSucceeded"
+    },
+    "CleanupSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

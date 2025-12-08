@@ -5,7 +5,7 @@
 
 ## Dernière mise à jour
 - **Date:** 2025-12-08
-- **Session:** Initialisation du dépôt et migration depuis sandbox
+- **Session:** Complétion de tous les modules Step Functions
 
 ---
 
@@ -65,44 +65,59 @@ Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS entr
 | `run_mysqldump_on_eks` | Dump MySQL via EKS | ✅ |
 | `run_mysqlimport_on_eks` | Import MySQL via EKS | ✅ |
 
+#### Module EFS (6 Step Functions) - 100%
+| Step Function | Description | Status |
+|--------------|-------------|--------|
+| `delete_filesystem` | Suppression EFS avec safety check | ✅ |
+| `create_filesystem` | Création EFS destination | ✅ |
+| `get_subpath_and_store_in_ssm` | Récupération subpath EFS | ✅ |
+| `restore_from_backup` | Restauration depuis AWS Backup | ✅ |
+| `setup_cross_account_replication` | Réplication EFS cross-account | ✅ |
+| `wait_replication_complete` | Attente fin réplication | ✅ |
+
+#### Module EKS (2 Step Functions) - 100%
+| Step Function | Description | Status |
+|--------------|-------------|--------|
+| `manage_storage` | Gestion StorageClass, PV, PVC | ✅ |
+| `scale_nodegroup_asg` | Scaling nodegroup ASG | ✅ |
+
+#### Module Utils (5 Step Functions) - 100%
+| Step Function | Description | Status |
+|--------------|-------------|--------|
+| `tag_resources` | Tagging des ressources | ✅ |
+| `run_archive_job` | Archivage MySQL et media vers S3 | ✅ |
+| `cleanup_and_stop` | Cleanup et arrêt parallèle | ✅ |
+| `prepare_refresh` | Préparation refresh (noms, tags) | ✅ |
+| `notify` | Notifications DynamoDB + SNS | ✅ |
+
+#### Orchestrator (1 Step Function) - 100%
+| Step Function | Description | Status |
+|--------------|-------------|--------|
+| `refresh_orchestrator` | Orchestrateur principal 3 phases | ✅ |
+
 #### Infrastructure Terraform
 - [x] Structure du module Terraform
 - [x] Module IAM (orchestrator role)
 - [x] Module Step Functions DB
 - [x] Variables et outputs
 
-### 🚧 En cours
-
-#### Module EFS (1/6 Step Functions) - 17%
-| Step Function | Description | Status |
-|--------------|-------------|--------|
-| `delete_filesystem` | Suppression EFS avec safety check | ✅ |
-| `create_filesystem` | Création EFS destination | ❌ |
-| `get_subpath_and_store_in_ssm` | Récupération subpath EFS | ❌ |
-| `restore_from_backup` | Restauration depuis AWS Backup | ❌ |
-| `setup_cross_account_replication` | Réplication EFS cross-account | ❌ |
-| `wait_replication_complete` | Attente fin réplication | ❌ |
+#### Tests CI/CD
+- [x] Script de validation ASL (Python)
+- [x] Tests pytest pour validation structurelle
+- [x] Tests Step Functions Local (Docker)
+- [x] GitHub Actions workflow
 
 ### ❌ À faire
 
-#### Module EKS (0/2)
-- [ ] `manage_storage` - Gestion storage EKS
-- [ ] `scale_nodegroup_asg` - Scaling nodegroup ASG
-
-#### Module Utils (0/5)
-- [ ] `tag_resources` - Tagging des ressources
-- [ ] `run_archive_job` - Archivage
-- [ ] `cleanup_and_stop` - Cleanup et arrêt
-- [ ] `prepare_refresh` - Préparation refresh
-- [ ] `notify` - Notifications SNS
-
-#### Orchestrator (0/1)
-- [ ] `refresh_orchestrator` - Orchestrateur principal
+#### Terraform Modules
+- [ ] Module Terraform pour EFS Step Functions
+- [ ] Module Terraform pour EKS Step Functions
+- [ ] Module Terraform pour Utils Step Functions
+- [ ] Module Terraform pour Orchestrator
 
 #### Tests
 - [ ] Tests unitaires Terraform
-- [ ] Tests d'intégration Step Functions
-- [ ] Validation cross-account
+- [ ] Tests d'intégration complète
 
 ---
 
@@ -119,26 +134,38 @@ terraform-aws-refresh/
 ├── modules/
 │   ├── step-functions/
 │   │   ├── db/                # ✅ 17 Step Functions DB
-│   │   │   ├── *.asl.json     # Définitions ASL
-│   │   │   ├── main.tf
-│   │   │   ├── variables.tf
-│   │   │   └── outputs.tf
-│   │   ├── efs/               # 🚧 Step Functions EFS
-│   │   ├── eks/               # ❌ Step Functions EKS
-│   │   └── utils/             # ❌ Step Functions Utils
+│   │   │   └── *.asl.json     # Définitions ASL
+│   │   ├── efs/               # ✅ 6 Step Functions EFS
+│   │   │   └── *.asl.json     # Définitions ASL
+│   │   ├── eks/               # ✅ 2 Step Functions EKS
+│   │   │   └── *.asl.json     # Définitions ASL
+│   │   ├── utils/             # ✅ 5 Step Functions Utils
+│   │   │   └── *.asl.json     # Définitions ASL
+│   │   └── orchestrator/      # ✅ 1 Orchestrateur principal
+│   │       └── *.asl.json     # Définitions ASL
 │   │
-│   ├── iam/                   # ✅ Rôles IAM cross-account
-│   │   ├── main.tf
-│   │   ├── variables.tf
-│   │   └── outputs.tf
-│   │
-│   └── orchestrator/          # ❌ Orchestrateur principal
+│   └── iam/                   # ✅ Rôles IAM cross-account
+│       ├── main.tf
+│       ├── variables.tf
+│       └── outputs.tf
+│
+├── scripts/
+│   └── validate_asl.py        # ✅ Validateur ASL Python
+│
+├── tests/
+│   ├── conftest.py            # ✅ Fixtures pytest
+│   ├── test_asl_validation.py # ✅ Tests validation ASL
+│   └── test_stepfunctions_local.py # ✅ Tests Docker SF Local
+│
+├── .github/
+│   └── workflows/
+│       └── step-functions.yml # ✅ CI/CD GitHub Actions
 │
 ├── examples/
 │   ├── simple/                # Exemple simple
 │   └── complete/              # Exemple complet
 │
-└── tests/                     # Tests
+└── requirements-dev.txt       # ✅ Dépendances tests Python
 ```
 
 ---
@@ -184,6 +211,41 @@ terraform output destination_role_policy > destination-role-policy.json
 
 ## Sessions de développement
 
+### 2025-12-08 - Complétion des Step Functions
+**Objectif:** Compléter tous les modules Step Functions ASL
+
+**Réalisé:**
+1. ✅ Module EFS complet (6 Step Functions)
+   - `create_filesystem` - Création EFS avec lifecycle et mount targets
+   - `get_subpath_and_store_in_ssm` - Récupération subpath via Lambda
+   - `restore_from_backup` - Restauration depuis AWS Backup
+   - `setup_cross_account_replication` - Configuration réplication cross-account
+   - `wait_replication_complete` - Attente synchronisation initiale
+2. ✅ Module EKS complet (2 Step Functions)
+   - `manage_storage` - Gestion StorageClass, PV, PVC
+   - `scale_nodegroup_asg` - Scaling ASG nodegroup
+3. ✅ Module Utils complet (5 Step Functions)
+   - `tag_resources` - Tagging avec merge source/config
+   - `run_archive_job` - Archivage MySQL/media vers S3
+   - `prepare_refresh` - Génération noms et récupération tags
+   - `cleanup_and_stop` - Cleanup parallèle clusters/EFS/nodegroup
+   - `notify` - Notifications DynamoDB + SNS
+4. ✅ Orchestrateur principal
+   - `refresh_orchestrator` - Workflow 3 phases (Data, Switch, Cleanup)
+5. ✅ Tests CI/CD
+   - Script validation ASL Python (`validate_asl.py`)
+   - Tests pytest pour validation structurelle
+   - Tests Step Functions Local (Docker)
+   - GitHub Actions workflow
+
+**Stats:**
+- Total: 31 Step Functions ASL validées
+- 0 erreurs, 11 warnings (attendus)
+
+**Prochaines étapes:**
+1. Créer modules Terraform pour EFS/EKS/Utils/Orchestrator
+2. Tests d'intégration complets
+
 ### 2025-12-08 - Initialisation
 **Objectif:** Créer le nouveau dépôt propre depuis le sandbox legacy
 
@@ -193,13 +255,6 @@ terraform output destination_role_policy > destination-role-policy.json
 3. ✅ Migration 17 Step Functions DB depuis sandbox
 4. ✅ Module IAM avec policies cross-account
 5. ✅ Module Step Functions DB complet
-
-**Prochaines étapes:**
-1. Compléter module EFS (5 Step Functions restantes)
-2. Créer module EKS (2 Step Functions)
-3. Créer module Utils (5 Step Functions)
-4. Créer orchestrateur principal
-5. Tests et validation
 
 ---
 

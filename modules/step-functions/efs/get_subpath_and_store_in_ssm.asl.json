@@ -1,0 +1,213 @@
+{
+  "Comment": "Creates a temp EFS Access Point, invokes a Lambda to find subpath, stores results in SSM, and cleans up",
+  "StartAt": "CreateAccessPoint",
+  "States": {
+    "CreateAccessPoint": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:createAccessPoint",
+      "Parameters": {
+        "ClientToken.$": "States.UUID()",
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.AccessPoint",
+      "Next": "WaitAccessPoint",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ProcessFailed"
+        }
+      ]
+    },
+    "WaitAccessPoint": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "DescribeAccessPoint"
+    },
+    "DescribeAccessPoint": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeAccessPoints",
+      "Parameters": {
+        "AccessPointId.$": "$.AccessPoint.AccessPointId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.AccessPointStatus",
+      "Next": "IsAccessPointAvailable"
+    },
+    "IsAccessPointAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.AccessPointStatus.AccessPoints[0].LifeCycleState",
+          "StringEquals": "available",
+          "Next": "UpdateLambdaConfiguration"
+        }
+      ],
+      "Default": "WaitAccessPoint"
+    },
+    "UpdateLambdaConfiguration": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:updateFunctionConfiguration",
+      "Parameters": {
+        "FunctionName.$": "$.LambdaEfsFunction",
+        "FileSystemConfigs": [
+          {
+            "Arn.$": "$.AccessPoint.AccessPointArn",
+            "LocalMountPath": "/mnt/efs"
+          }
+        ]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitLambdaUpdate",
+      "Retry": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.LambdaError",
+          "Next": "CleanupAccessPoint"
+        }
+      ]
+    },
+    "WaitLambdaUpdate": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "InvokeLambda"
+    },
+    "InvokeLambda": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.LambdaEfsFunction",
+        "Payload": {
+          "EFSArn.$": "$.FileSystemArn",
+          "LocalMountPath": "/mnt/efs"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "EfsRestoreDir.$": "States.StringToJson($.Payload.body)"
+      },
+      "ResultPath": "$.LambdaResult",
+      "Next": "UpdateEfsIdSSM",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ResourceNotReadyException",
+            "Lambda.EFSMountFailureException",
+            "Lambda.EFSMountConnectivityException",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 10,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.LambdaInvokeError",
+          "Next": "CleanupAccessPoint"
+        }
+      ]
+    },
+    "UpdateEfsIdSSM": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+      "Parameters": {
+        "Name.$": "$.EfsIdSSMParameterName",
+        "Value.$": "$.FileSystemId",
+        "Type": "String",
+        "Overwrite": true
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "UpdateEfsSubPathSSM",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SSMError",
+          "Next": "CleanupAccessPoint"
+        }
+      ]
+    },
+    "UpdateEfsSubPathSSM": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
+      "Parameters": {
+        "Name.$": "$.EfsSubPathSSMParameterName",
+        "Value.$": "$.LambdaResult.EfsRestoreDir[0]",
+        "Type": "String",
+        "Overwrite": true
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "CleanupAccessPoint",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SSMSubPathError",
+          "Next": "CleanupAccessPoint"
+        }
+      ]
+    },
+    "CleanupAccessPoint": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+      "Parameters": {
+        "AccessPointId.$": "$.AccessPoint.AccessPointId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.CleanupError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "get_subpath_and_store_in_ssm",
+        "FileSystemId.$": "$.FileSystemId",
+        "EfsSubPath.$": "$.LambdaResult.EfsRestoreDir[0]"
+      },
+      "Next": "ProcessSucceeded"
+    },
+    "ProcessFailed": {
+      "Type": "Fail",
+      "Error": "GetSubPathFailed",
+      "Cause": "Failed to get EFS subpath and store in SSM"
+    },
+    "ProcessSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}
