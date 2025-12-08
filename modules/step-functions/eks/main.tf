@@ -6,7 +6,7 @@
 locals {
   step_functions = {
     # Storage Management
-    manage_storage      = "manage_storage.asl.json"
+    manage_storage = "manage_storage.asl.json"
 
     # Scaling
     scale_nodegroup_asg = "scale_nodegroup_asg.asl.json"

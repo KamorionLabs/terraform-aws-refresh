@@ -6,24 +6,24 @@
 locals {
   step_functions = {
     # Core Operations
-    restore_cluster          = "restore_cluster.asl.json"
-    delete_cluster           = "delete_cluster.asl.json"
-    rename_cluster           = "rename_cluster.asl.json"
-    ensure_cluster_available = "ensure_cluster_available.asl.json"
+    restore_cluster           = "restore_cluster.asl.json"
+    delete_cluster            = "delete_cluster.asl.json"
+    rename_cluster            = "rename_cluster.asl.json"
+    ensure_cluster_available  = "ensure_cluster_available.asl.json"
     ensure_cluster_not_exists = "ensure_cluster_not_exists.asl.json"
-    stop_cluster             = "stop_cluster.asl.json"
+    stop_cluster              = "stop_cluster.asl.json"
 
     # Instance Management
-    create_instance          = "create_instance.asl.json"
+    create_instance = "create_instance.asl.json"
 
     # Snapshot Management
-    share_snapshot           = "share_snapshot.asl.json"
-    create_manual_snapshot   = "create_manual_snapshot.asl.json"
-    list_shared_snapshots    = "list_shared_snapshots.asl.json"
+    share_snapshot         = "share_snapshot.asl.json"
+    create_manual_snapshot = "create_manual_snapshot.asl.json"
+    list_shared_snapshots  = "list_shared_snapshots.asl.json"
 
     # Secrets Management
-    enable_master_secret     = "enable_master_secret.asl.json"
-    rotate_secrets           = "rotate_secrets.asl.json"
+    enable_master_secret = "enable_master_secret.asl.json"
+    rotate_secrets       = "rotate_secrets.asl.json"
 
     # S3 & SQL Operations
     configure_s3_integration = "configure_s3_integration.asl.json"
@@ -31,8 +31,8 @@ locals {
     run_sql_from_s3          = "run_sql_from_s3.asl.json"
 
     # EKS Integration
-    run_mysqldump_on_eks     = "run_mysqldump_on_eks.asl.json"
-    run_mysqlimport_on_eks   = "run_mysqlimport_on_eks.asl.json"
+    run_mysqldump_on_eks   = "run_mysqldump_on_eks.asl.json"
+    run_mysqlimport_on_eks = "run_mysqlimport_on_eks.asl.json"
   }
 }
 

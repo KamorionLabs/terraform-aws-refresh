@@ -10,18 +10,13 @@
 module "step_functions_db" {
   source = "./modules/step-functions/db"
 
-  prefix                    = var.prefix
-  environment               = var.environment
-  tags                      = var.tags
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
 
-  # Cross-account configuration
-  source_account_id         = var.source_account_id
-  destination_account_ids   = var.destination_account_ids
-  orchestrator_role_arn     = module.iam.orchestrator_role_arn
-
-  enable_logging            = var.enable_step_functions_logging
-  log_retention_days        = var.log_retention_days
-  enable_xray_tracing       = var.enable_xray_tracing
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
 }
 
 # -----------------------------------------------------------------------------
@@ -30,17 +25,13 @@ module "step_functions_db" {
 module "step_functions_efs" {
   source = "./modules/step-functions/efs"
 
-  prefix                    = var.prefix
-  environment               = var.environment
-  tags                      = var.tags
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
 
-  source_account_id         = var.source_account_id
-  destination_account_ids   = var.destination_account_ids
-  orchestrator_role_arn     = module.iam.orchestrator_role_arn
-
-  enable_logging            = var.enable_step_functions_logging
-  log_retention_days        = var.log_retention_days
-  enable_xray_tracing       = var.enable_xray_tracing
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
 }
 
 # -----------------------------------------------------------------------------
@@ -49,17 +40,13 @@ module "step_functions_efs" {
 module "step_functions_eks" {
   source = "./modules/step-functions/eks"
 
-  prefix                    = var.prefix
-  environment               = var.environment
-  tags                      = var.tags
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
 
-  source_account_id         = var.source_account_id
-  destination_account_ids   = var.destination_account_ids
-  orchestrator_role_arn     = module.iam.orchestrator_role_arn
-
-  enable_logging            = var.enable_step_functions_logging
-  log_retention_days        = var.log_retention_days
-  enable_xray_tracing       = var.enable_xray_tracing
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
 }
 
 # -----------------------------------------------------------------------------
@@ -68,17 +55,13 @@ module "step_functions_eks" {
 module "step_functions_utils" {
   source = "./modules/step-functions/utils"
 
-  prefix                    = var.prefix
-  environment               = var.environment
-  tags                      = var.tags
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
 
-  source_account_id         = var.source_account_id
-  destination_account_ids   = var.destination_account_ids
-  orchestrator_role_arn     = module.iam.orchestrator_role_arn
-
-  enable_logging            = var.enable_step_functions_logging
-  log_retention_days        = var.log_retention_days
-  enable_xray_tracing       = var.enable_xray_tracing
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
 }
 
 # -----------------------------------------------------------------------------
@@ -87,16 +70,15 @@ module "step_functions_utils" {
 module "iam" {
   source = "./modules/iam"
 
-  prefix                    = var.prefix
-  environment              = var.environment
-  tags                     = var.tags
+  prefix = var.prefix
+  tags   = var.tags
 
-  source_account_id        = var.source_account_id
-  destination_account_ids  = var.destination_account_ids
+  source_account_id       = var.source_account_id
+  destination_account_ids = var.destination_account_ids
 
   # Optional: AWS Organization
-  use_aws_organization     = var.use_aws_organization
-  aws_organization_id      = var.aws_organization_id
+  use_aws_organization = var.use_aws_organization
+  aws_organization_id  = var.aws_organization_id
 }
 
 # -----------------------------------------------------------------------------
@@ -105,21 +87,17 @@ module "iam" {
 module "orchestrator" {
   source = "./modules/step-functions/orchestrator"
 
-  prefix                    = var.prefix
-  environment               = var.environment
-  tags                      = var.tags
+  prefix                = var.prefix
+  tags                  = var.tags
+  orchestrator_role_arn = module.iam.orchestrator_role_arn
 
-  source_account_id         = var.source_account_id
-  destination_account_ids   = var.destination_account_ids
-  orchestrator_role_arn     = module.iam.orchestrator_role_arn
-
-  enable_logging            = var.enable_step_functions_logging
-  log_retention_days        = var.log_retention_days
-  enable_xray_tracing       = var.enable_xray_tracing
+  enable_logging      = var.enable_step_functions_logging
+  log_retention_days  = var.log_retention_days
+  enable_xray_tracing = var.enable_xray_tracing
 
   # Pass Step Function ARNs from other modules
-  db_step_function_arns     = module.step_functions_db.step_function_arns
-  efs_step_function_arns    = module.step_functions_efs.step_function_arns
-  eks_step_function_arns    = module.step_functions_eks.step_function_arns
-  utils_step_function_arns  = module.step_functions_utils.step_function_arns
+  db_step_function_arns    = module.step_functions_db.step_function_arns
+  efs_step_function_arns   = module.step_functions_efs.step_function_arns
+  eks_step_function_arns   = module.step_functions_eks.step_function_arns
+  utils_step_function_arns = module.step_functions_utils.step_function_arns
 }

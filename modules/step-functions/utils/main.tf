@@ -6,17 +6,17 @@
 locals {
   step_functions = {
     # Tagging
-    tag_resources     = "tag_resources.asl.json"
+    tag_resources = "tag_resources.asl.json"
 
     # Archive
-    run_archive_job   = "run_archive_job.asl.json"
+    run_archive_job = "run_archive_job.asl.json"
 
     # Preparation & Cleanup
-    prepare_refresh   = "prepare_refresh.asl.json"
-    cleanup_and_stop  = "cleanup_and_stop.asl.json"
+    prepare_refresh  = "prepare_refresh.asl.json"
+    cleanup_and_stop = "cleanup_and_stop.asl.json"
 
     # Notifications
-    notify            = "notify.asl.json"
+    notify = "notify.asl.json"
   }
 }
 

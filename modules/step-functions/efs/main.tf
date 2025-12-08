@@ -6,16 +6,16 @@
 locals {
   step_functions = {
     # Core Operations
-    delete_filesystem              = "delete_filesystem.asl.json"
-    create_filesystem              = "create_filesystem.asl.json"
+    delete_filesystem = "delete_filesystem.asl.json"
+    create_filesystem = "create_filesystem.asl.json"
 
     # Subpath Management
-    get_subpath_and_store_in_ssm   = "get_subpath_and_store_in_ssm.asl.json"
+    get_subpath_and_store_in_ssm = "get_subpath_and_store_in_ssm.asl.json"
 
     # Backup & Replication
-    restore_from_backup            = "restore_from_backup.asl.json"
+    restore_from_backup             = "restore_from_backup.asl.json"
     setup_cross_account_replication = "setup_cross_account_replication.asl.json"
-    wait_replication_complete      = "wait_replication_complete.asl.json"
+    wait_replication_complete       = "wait_replication_complete.asl.json"
   }
 }
 

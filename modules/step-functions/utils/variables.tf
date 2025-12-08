@@ -3,11 +3,6 @@ variable "prefix" {
   type        = string
 }
 
-variable "environment" {
-  description = "Environment name"
-  type        = string
-}
-
 variable "tags" {
   description = "Tags to apply to resources"
   type        = map(string)
@@ -17,16 +12,6 @@ variable "tags" {
 variable "orchestrator_role_arn" {
   description = "ARN of the IAM role for Step Functions execution"
   type        = string
-}
-
-variable "source_account_id" {
-  description = "Source (production) AWS account ID"
-  type        = string
-}
-
-variable "destination_account_ids" {
-  description = "List of destination AWS account IDs"
-  type        = list(string)
 }
 
 variable "enable_logging" {
