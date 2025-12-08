@@ -59,7 +59,7 @@ variable "aws_organization_id" {
 # Step Functions Configuration
 # -----------------------------------------------------------------------------
 
-variable "enable_cloudwatch_logging" {
+variable "enable_step_functions_logging" {
   description = "Enable CloudWatch logging for Step Functions"
   type        = bool
   default     = true
@@ -69,6 +69,12 @@ variable "log_retention_days" {
   description = "CloudWatch log retention in days"
   type        = number
   default     = 30
+}
+
+variable "enable_xray_tracing" {
+  description = "Enable X-Ray tracing for Step Functions"
+  type        = bool
+  default     = false
 }
 
 # -----------------------------------------------------------------------------

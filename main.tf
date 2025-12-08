@@ -4,24 +4,13 @@
 # This module deploys Step Functions for orchestrating database refresh
 # operations across multiple AWS accounts (source production -> destination non-prod)
 
-terraform {
-  required_version = ">= 1.0"
-
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.0"
-    }
-  }
-}
-
 # -----------------------------------------------------------------------------
 # Step Functions - Database Module
 # -----------------------------------------------------------------------------
 module "step_functions_db" {
   source = "./modules/step-functions/db"
 
-  prefix                     = var.prefix
+  prefix                    = var.prefix
   environment               = var.environment
   tags                      = var.tags
 
@@ -29,31 +18,68 @@ module "step_functions_db" {
   source_account_id         = var.source_account_id
   destination_account_ids   = var.destination_account_ids
   orchestrator_role_arn     = module.iam.orchestrator_role_arn
+
+  enable_logging            = var.enable_step_functions_logging
+  log_retention_days        = var.log_retention_days
+  enable_xray_tracing       = var.enable_xray_tracing
 }
 
 # -----------------------------------------------------------------------------
-# Step Functions - EFS Module (TODO)
+# Step Functions - EFS Module
 # -----------------------------------------------------------------------------
-# module "step_functions_efs" {
-#   source = "./modules/step-functions/efs"
-#   ...
-# }
+module "step_functions_efs" {
+  source = "./modules/step-functions/efs"
+
+  prefix                    = var.prefix
+  environment               = var.environment
+  tags                      = var.tags
+
+  source_account_id         = var.source_account_id
+  destination_account_ids   = var.destination_account_ids
+  orchestrator_role_arn     = module.iam.orchestrator_role_arn
+
+  enable_logging            = var.enable_step_functions_logging
+  log_retention_days        = var.log_retention_days
+  enable_xray_tracing       = var.enable_xray_tracing
+}
 
 # -----------------------------------------------------------------------------
-# Step Functions - EKS Module (TODO)
+# Step Functions - EKS Module
 # -----------------------------------------------------------------------------
-# module "step_functions_eks" {
-#   source = "./modules/step-functions/eks"
-#   ...
-# }
+module "step_functions_eks" {
+  source = "./modules/step-functions/eks"
+
+  prefix                    = var.prefix
+  environment               = var.environment
+  tags                      = var.tags
+
+  source_account_id         = var.source_account_id
+  destination_account_ids   = var.destination_account_ids
+  orchestrator_role_arn     = module.iam.orchestrator_role_arn
+
+  enable_logging            = var.enable_step_functions_logging
+  log_retention_days        = var.log_retention_days
+  enable_xray_tracing       = var.enable_xray_tracing
+}
 
 # -----------------------------------------------------------------------------
-# Step Functions - Utils Module (TODO)
+# Step Functions - Utils Module
 # -----------------------------------------------------------------------------
-# module "step_functions_utils" {
-#   source = "./modules/step-functions/utils"
-#   ...
-# }
+module "step_functions_utils" {
+  source = "./modules/step-functions/utils"
+
+  prefix                    = var.prefix
+  environment               = var.environment
+  tags                      = var.tags
+
+  source_account_id         = var.source_account_id
+  destination_account_ids   = var.destination_account_ids
+  orchestrator_role_arn     = module.iam.orchestrator_role_arn
+
+  enable_logging            = var.enable_step_functions_logging
+  log_retention_days        = var.log_retention_days
+  enable_xray_tracing       = var.enable_xray_tracing
+}
 
 # -----------------------------------------------------------------------------
 # IAM Roles for Cross-Account Access
@@ -74,9 +100,26 @@ module "iam" {
 }
 
 # -----------------------------------------------------------------------------
-# Orchestrator (TODO)
+# Orchestrator
 # -----------------------------------------------------------------------------
-# module "orchestrator" {
-#   source = "./modules/orchestrator"
-#   ...
-# }
+module "orchestrator" {
+  source = "./modules/step-functions/orchestrator"
+
+  prefix                    = var.prefix
+  environment               = var.environment
+  tags                      = var.tags
+
+  source_account_id         = var.source_account_id
+  destination_account_ids   = var.destination_account_ids
+  orchestrator_role_arn     = module.iam.orchestrator_role_arn
+
+  enable_logging            = var.enable_step_functions_logging
+  log_retention_days        = var.log_retention_days
+  enable_xray_tracing       = var.enable_xray_tracing
+
+  # Pass Step Function ARNs from other modules
+  db_step_function_arns     = module.step_functions_db.step_function_arns
+  efs_step_function_arns    = module.step_functions_efs.step_function_arns
+  eks_step_function_arns    = module.step_functions_eks.step_function_arns
+  utils_step_function_arns  = module.step_functions_utils.step_function_arns
+}

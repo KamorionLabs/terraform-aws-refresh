@@ -107,13 +107,16 @@ Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS entr
 - [x] Tests Step Functions Local (Docker)
 - [x] GitHub Actions workflow
 
-### ❌ À faire
+#### Terraform Modules - 100%
+- [x] Module Terraform pour DB Step Functions
+- [x] Module Terraform pour EFS Step Functions
+- [x] Module Terraform pour EKS Step Functions
+- [x] Module Terraform pour Utils Step Functions
+- [x] Module Terraform pour Orchestrator
+- [x] Main module avec tous les sous-modules
+- [x] Variables et outputs consolidés
 
-#### Terraform Modules
-- [ ] Module Terraform pour EFS Step Functions
-- [ ] Module Terraform pour EKS Step Functions
-- [ ] Module Terraform pour Utils Step Functions
-- [ ] Module Terraform pour Orchestrator
+### ❌ À faire
 
 #### Tests
 - [ ] Tests unitaires Terraform
