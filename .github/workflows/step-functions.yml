@@ -1,0 +1,258 @@
+name: Step Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.asl.json'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'requirements-dev.txt'
+      - '.github/workflows/step-functions.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.asl.json'
+      - 'scripts/**'
+      - 'tests/**'
+      - 'requirements-dev.txt'
+      - '.github/workflows/step-functions.yml'
+  workflow_call:
+
+jobs:
+  # Job 1: Local validation (no AWS credentials required)
+  validate-local:
+    name: Local Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Validate JSON syntax
+        run: |
+          echo "Validating JSON syntax..."
+          for file in $(find . -name "*.asl.json" -type f -not -path "./.git/*"); do
+            if ! python -m json.tool "$file" > /dev/null 2>&1; then
+              echo "Invalid JSON: $file"
+              exit 1
+            fi
+          done
+          echo "All JSON files are syntactically valid"
+
+      - name: Validate ASL structure
+        run: python scripts/validate_asl.py --verbose
+
+      - name: Run pytest ASL validation tests
+        run: pytest tests/test_asl_validation.py -v --tb=short
+
+  # Job 2: Step Functions Local (Docker)
+  test-sfn-local:
+    name: Step Functions Local Tests
+    runs-on: ubuntu-latest
+    needs: validate-local
+    services:
+      stepfunctions-local:
+        image: amazon/aws-stepfunctions-local:latest
+        ports:
+          - 8083:8083
+        env:
+          AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Wait for Step Functions Local
+        run: |
+          echo "Waiting for Step Functions Local to be ready..."
+          for i in {1..30}; do
+            if curl -s http://localhost:8083 > /dev/null 2>&1; then
+              echo "Step Functions Local is ready"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+
+      - name: Run Step Functions Local tests
+        env:
+          SFN_LOCAL_ENDPOINT: http://localhost:8083
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+          AWS_DEFAULT_REGION: us-east-1
+        run: pytest tests/test_stepfunctions_local.py -v --tb=short -m sfn_local
+
+  # Job 3: Matrix validation per module
+  validate-db-module:
+    name: DB Module - ${{ matrix.step_function }}
+    runs-on: ubuntu-latest
+    needs: validate-local
+    strategy:
+      fail-fast: false
+      matrix:
+        step_function:
+          - configure_s3_integration
+          - create_instance
+          - create_manual_snapshot
+          - delete_cluster
+          - enable_master_secret
+          - ensure_cluster_available
+          - ensure_cluster_not_exists
+          - list_shared_snapshots
+          - rename_cluster
+          - restore_cluster
+          - rotate_secrets
+          - run_mysqldump_on_eks
+          - run_mysqlimport_on_eks
+          - run_sql_from_s3
+          - run_sql_lambda
+          - share_snapshot
+          - stop_cluster
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ${{ matrix.step_function }}
+        run: |
+          file="modules/step-functions/db/${{ matrix.step_function }}.asl.json"
+          echo "Validating: $file"
+
+          if [ ! -f "$file" ]; then
+            echo "File not found: $file"
+            exit 1
+          fi
+
+          # Validate JSON
+          if ! jq empty "$file"; then
+            echo "Invalid JSON syntax"
+            exit 1
+          fi
+
+          # Check required ASL fields
+          startat=$(jq -r '.StartAt // empty' "$file")
+          if [ -z "$startat" ]; then
+            echo "Missing 'StartAt' field"
+            exit 1
+          fi
+
+          states=$(jq -r '.States // empty' "$file")
+          if [ -z "$states" ]; then
+            echo "Missing 'States' field"
+            exit 1
+          fi
+
+          # Check StartAt references valid state
+          state_exists=$(jq -r --arg s "$startat" '.States[$s] // empty' "$file")
+          if [ -z "$state_exists" ]; then
+            echo "StartAt '$startat' references non-existent state"
+            exit 1
+          fi
+
+          # Count cross-account credentials
+          creds_count=$(jq '[.. | .Credentials? // empty | select(. != null)] | length' "$file")
+          echo "Cross-account Credentials blocks: $creds_count"
+
+          # Count Task states and error handling
+          task_count=$(jq '[.States | to_entries[] | select(.value.Type == "Task")] | length' "$file")
+          catch_count=$(jq '[.States | to_entries[] | select(.value.Type == "Task" and .value.Catch != null)] | length' "$file")
+          echo "Task states: $task_count (with Catch: $catch_count)"
+
+          echo "${{ matrix.step_function }} is valid"
+
+  validate-efs-module:
+    name: EFS Module - ${{ matrix.step_function }}
+    runs-on: ubuntu-latest
+    needs: validate-local
+    strategy:
+      fail-fast: false
+      matrix:
+        step_function:
+          - delete_filesystem
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate ${{ matrix.step_function }}
+        run: |
+          file="modules/step-functions/efs/${{ matrix.step_function }}.asl.json"
+          echo "Validating: $file"
+
+          if [ ! -f "$file" ]; then
+            echo "File not found (may not be implemented yet): $file"
+            exit 0
+          fi
+
+          if ! jq empty "$file"; then
+            echo "Invalid JSON syntax"
+            exit 1
+          fi
+
+          startat=$(jq -r '.StartAt // empty' "$file")
+          states=$(jq -r '.States // empty' "$file")
+
+          if [ -z "$startat" ] || [ -z "$states" ]; then
+            echo "Missing required ASL fields"
+            exit 1
+          fi
+
+          echo "${{ matrix.step_function }} is valid"
+
+  # Summary job
+  summary:
+    name: Tests Summary
+    runs-on: ubuntu-latest
+    needs: [validate-local, test-sfn-local, validate-db-module, validate-efs-module]
+    if: always()
+    steps:
+      - name: Check Results
+        run: |
+          echo "## Step Functions Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.validate-local.result }}" == "success" ]; then
+            echo "- Local validation: passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Local validation: failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.test-sfn-local.result }}" == "success" ]; then
+            echo "- Step Functions Local tests: passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.test-sfn-local.result }}" == "skipped" ]; then
+            echo "- Step Functions Local tests: skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Step Functions Local tests: failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.validate-db-module.result }}" == "success" ]; then
+            echo "- DB module validation: passed (17 step functions)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- DB module validation: failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.validate-efs-module.result }}" == "success" ]; then
+            echo "- EFS module validation: passed" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- EFS module validation: failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Fail if any required job failed
+          if [ "${{ needs.validate-local.result }}" != "success" ]; then
+            exit 1
+          fi

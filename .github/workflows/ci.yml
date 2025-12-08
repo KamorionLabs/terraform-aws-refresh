@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.filter.outputs.terraform }}
+      step-functions: ${{ steps.filter.outputs.step-functions }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            terraform:
+              - '**.tf'
+            step-functions:
+              - '**.asl.json'
+              - 'scripts/**'
+              - 'tests/**'
+              - 'requirements-dev.txt'
+
+  terraform:
+    name: Terraform
+    needs: changes
+    if: needs.changes.outputs.terraform == 'true' || github.event_name == 'push'
+    uses: ./.github/workflows/terraform.yml
+
+  step-functions:
+    name: Step Functions
+    needs: changes
+    if: needs.changes.outputs.step-functions == 'true' || github.event_name == 'push'
+    uses: ./.github/workflows/step-functions.yml
+
+  summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [terraform, step-functions]
+    if: always()
+    steps:
+      - name: Check Results
+        run: |
+          echo "## CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.terraform.result }}" == "success" ]; then
+            echo "✅ Terraform validation passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.terraform.result }}" == "skipped" ]; then
+            echo "⏭️ Terraform validation skipped (no changes)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Terraform validation failed" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if [ "${{ needs.step-functions.result }}" == "success" ]; then
+            echo "✅ Step Functions validation passed" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ needs.step-functions.result }}" == "skipped" ]; then
+            echo "⏭️ Step Functions validation skipped (no changes)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Step Functions validation failed" >> $GITHUB_STEP_SUMMARY
+          fi
