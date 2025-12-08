@@ -16,7 +16,11 @@
               "IsPresent": true
             },
             {
-              "Variable": "$.ScriptsLocation",
+              "Variable": "$.SecretArn",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.Sql",
               "IsPresent": true
             }
           ],
@@ -34,9 +38,10 @@
       "Parameters": {
         "FunctionName.$": "$.LambdaArn",
         "Payload": {
-          "clusterId.$": "$.ClusterIdentifier",
-          "databaseName.$": "$.DatabaseName",
-          "scriptsLocation.$": "$.ScriptsLocation"
+          "cluster.$": "$.ClusterIdentifier",
+          "dbname.$": "$.DatabaseName",
+          "secretname.$": "$.SecretArn",
+          "sql.$": "$.Sql"
         }
       },
       "ResultPath": "$.LambdaResult",
@@ -84,7 +89,7 @@
     "InvalidInput": {
       "Type": "Fail",
       "Error": "InvalidInput",
-      "Cause": "Required parameters missing: LambdaArn, ClusterIdentifier, and ScriptsLocation are required"
+      "Cause": "Required parameters missing: LambdaArn, ClusterIdentifier, SecretArn, and Sql are required"
     },
     "SQLExecutionFailed": {
       "Type": "Fail",

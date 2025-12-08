@@ -1,0 +1,234 @@
+variable "prefix" {
+  description = "Prefix for resource names"
+  type        = string
+  default     = "refresh"
+}
+
+variable "tags" {
+  description = "Tags to apply to resources"
+  type        = map(string)
+  default     = {}
+}
+
+variable "orchestrator_role_arn" {
+  description = "ARN of the orchestrator IAM role (from shared services account). Required if create_role is true."
+  type        = string
+  default     = null
+}
+
+variable "aws_organization_id" {
+  description = "AWS Organization ID for additional trust policy condition (optional)"
+  type        = string
+  default     = null
+}
+
+# -----------------------------------------------------------------------------
+# IAM Role Configuration
+# -----------------------------------------------------------------------------
+
+variable "create_role" {
+  description = "Create IAM role for destination account. Set to false to use existing_role_arn."
+  type        = bool
+  default     = true
+}
+
+variable "existing_role_arn" {
+  description = "ARN of existing IAM role to use instead of creating one. Required if create_role is false."
+  type        = string
+  default     = null
+}
+
+variable "existing_role_name" {
+  description = "Name of existing IAM role (for attaching policies). Required if create_role is false and attach_policies is true."
+  type        = string
+  default     = null
+}
+
+variable "attach_policies" {
+  description = "Attach IAM policies to the role. Set to false if policies are managed externally."
+  type        = bool
+  default     = true
+}
+
+# -----------------------------------------------------------------------------
+# Feature Toggles
+# -----------------------------------------------------------------------------
+
+variable "enable_efs" {
+  description = "Enable EFS-related resources and permissions"
+  type        = bool
+  default     = true
+}
+
+variable "enable_eks" {
+  description = "Enable EKS-related permissions"
+  type        = bool
+  default     = true
+}
+
+variable "deploy_lambdas" {
+  description = "Deploy Lambda helper functions"
+  type        = bool
+  default     = true
+}
+
+# -----------------------------------------------------------------------------
+# EKS Access Entry Configuration
+# -----------------------------------------------------------------------------
+
+variable "create_eks_access_entry" {
+  description = "Create EKS Access Entry for the destination role"
+  type        = bool
+  default     = false
+}
+
+variable "eks_cluster_name" {
+  description = "Name of the EKS cluster for access entry"
+  type        = string
+  default     = null
+}
+
+variable "eks_access_policy_arn" {
+  description = "ARN of the EKS access policy to associate (e.g., arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy)"
+  type        = string
+  default     = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+}
+
+variable "eks_access_scope_type" {
+  description = "Scope type for EKS access (cluster or namespace)"
+  type        = string
+  default     = "cluster"
+
+  validation {
+    condition     = contains(["cluster", "namespace"], var.eks_access_scope_type)
+    error_message = "eks_access_scope_type must be 'cluster' or 'namespace'."
+  }
+}
+
+variable "eks_access_scope_namespaces" {
+  description = "Namespaces for EKS access when scope_type is 'namespace'"
+  type        = list(string)
+  default     = []
+}
+
+# -----------------------------------------------------------------------------
+# Resource ARNs
+# -----------------------------------------------------------------------------
+
+variable "kms_key_arns" {
+  description = "List of KMS key ARNs for encryption"
+  type        = list(string)
+  default     = ["*"]
+}
+
+variable "s3_bucket_arns" {
+  description = "List of S3 bucket ARNs for SQL scripts and archives"
+  type        = list(string)
+  default     = ["arn:aws:s3:::*"]
+}
+
+variable "dynamodb_table_arn" {
+  description = "ARN of DynamoDB table for notifications (optional)"
+  type        = string
+  default     = null
+}
+
+variable "sns_topic_arn" {
+  description = "ARN of SNS topic for notifications (optional)"
+  type        = string
+  default     = null
+}
+
+# -----------------------------------------------------------------------------
+# Lambda Configuration
+# -----------------------------------------------------------------------------
+
+variable "lambda_subnet_ids" {
+  description = "Subnet IDs for Lambda VPC configuration"
+  type        = list(string)
+  default     = []
+}
+
+variable "lambda_security_group_ids" {
+  description = "Security group IDs for Lambda VPC configuration"
+  type        = list(string)
+  default     = []
+}
+
+variable "lambda_log_level" {
+  description = "Log level for Lambda functions"
+  type        = string
+  default     = "INFO"
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch log retention in days"
+  type        = number
+  default     = 30
+}
+
+# -----------------------------------------------------------------------------
+# Lambda Package Paths (optional - override defaults)
+# -----------------------------------------------------------------------------
+
+variable "pymysql_layer_path" {
+  description = "Path to PyMySQL layer zip file (optional, uses bundled if not provided)"
+  type        = string
+  default     = null
+}
+
+variable "run_sql_lambda_path" {
+  description = "Path to run-sql Lambda zip file (optional, uses bundled if not provided)"
+  type        = string
+  default     = null
+}
+
+variable "get_efs_subpath_lambda_path" {
+  description = "Path to get-efs-subpath Lambda zip file (optional, uses bundled if not provided)"
+  type        = string
+  default     = null
+}
+
+# -----------------------------------------------------------------------------
+# EFS Configuration (for get-efs-subpath Lambda)
+# -----------------------------------------------------------------------------
+
+variable "efs_access_point_arn" {
+  description = "ARN of EFS Access Point for Lambda to mount (required if enable_efs and deploy_lambdas)"
+  type        = string
+  default     = null
+}
+
+# -----------------------------------------------------------------------------
+# Lambda Deployment Configuration
+# -----------------------------------------------------------------------------
+
+variable "s3_bucket_id" {
+  description = "S3 bucket ID for storing Lambda deployment packages"
+  type        = string
+  default     = null
+}
+
+variable "vpc_id" {
+  description = "VPC ID for Lambda security group"
+  type        = string
+  default     = null
+}
+
+variable "create_lambda_security_group" {
+  description = "Create security group for Lambda functions"
+  type        = bool
+  default     = true
+}
+
+variable "database_cidr_blocks" {
+  description = "CIDR blocks for database access (MySQL 3306)"
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}
+
+variable "efs_cidr_blocks" {
+  description = "CIDR blocks for EFS access (NFS 2049)"
+  type        = list(string)
+  default     = ["10.0.0.0/8"]
+}

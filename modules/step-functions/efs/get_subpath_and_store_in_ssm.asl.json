@@ -155,7 +155,7 @@
       "Resource": "arn:aws:states:::aws-sdk:ssm:putParameter",
       "Parameters": {
         "Name.$": "$.EfsSubPathSSMParameterName",
-        "Value.$": "$.LambdaResult.EfsRestoreDir[0]",
+        "Value.$": "$.LambdaResult.EfsRestoreDir.subpath",
         "Type": "String",
         "Overwrite": true
       },
@@ -197,7 +197,7 @@
         "Status": "Completed",
         "ModuleName": "get_subpath_and_store_in_ssm",
         "FileSystemId.$": "$.FileSystemId",
-        "EfsSubPath.$": "$.LambdaResult.EfsRestoreDir[0]"
+        "EfsSubPath.$": "$.LambdaResult.EfsRestoreDir.subpath"
       },
       "Next": "ProcessSucceeded"
     },

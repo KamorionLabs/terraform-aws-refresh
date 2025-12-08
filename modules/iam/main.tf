@@ -72,7 +72,7 @@ resource "aws_iam_role_policy" "orchestrator_step_functions" {
           "states:DescribeExecution",
           "states:StopExecution"
         ]
-        Resource = "arn:aws:states:${data.aws_region.current.name}:${local.orchestrator_account_id}:stateMachine:${var.prefix}-*"
+        Resource = "arn:aws:states:${data.aws_region.current.id}:${local.orchestrator_account_id}:stateMachine:${var.prefix}-*"
       },
       {
         Effect = "Allow"
@@ -80,7 +80,7 @@ resource "aws_iam_role_policy" "orchestrator_step_functions" {
           "states:StartExecution.sync",
           "states:StartExecution.sync:2"
         ]
-        Resource = "arn:aws:states:${data.aws_region.current.name}:${local.orchestrator_account_id}:stateMachine:${var.prefix}-*"
+        Resource = "arn:aws:states:${data.aws_region.current.id}:${local.orchestrator_account_id}:stateMachine:${var.prefix}-*"
       },
       {
         Effect = "Allow"
@@ -89,7 +89,7 @@ resource "aws_iam_role_policy" "orchestrator_step_functions" {
           "events:PutRule",
           "events:DescribeRule"
         ]
-        Resource = "arn:aws:events:${data.aws_region.current.name}:${local.orchestrator_account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+        Resource = "arn:aws:events:${data.aws_region.current.id}:${local.orchestrator_account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
       }
     ]
   })
