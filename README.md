@@ -40,42 +40,41 @@ This module deploys a complete infrastructure for automating database refresh op
 └─────────────────────┘  └─────────────────────┘  └─────────────────────┘
 ```
 
+## Deployment Model
+
+This module follows a **multi-deployment architecture** where each AWS account has its own Terraform deployment:
+
+| Account | Module | Description |
+|---------|--------|-------------|
+| Shared Services | Root module | Orchestrator + Step Functions |
+| Production | `modules/source-account` | IAM role for snapshot/backup access |
+| Staging | `modules/destination-account` | IAM role + Lambda helpers |
+| Dev | `modules/destination-account` | IAM role + Lambda helpers |
+
+Each deployment has its own Terraform state and is applied independently.
+
+## Deployment Order
+
+1. **First**: Deploy `source-account` and `destination-account` modules in their respective accounts
+2. **Then**: Deploy the root module in shared services, passing the role ARNs created in step 1
+
+This order is required because the orchestrator needs to know the role ARNs to configure its assume-role permissions.
+
 ## Usage
 
-### Basic Usage (Orchestrator Account)
-
-```hcl
-module "refresh" {
-  source  = "KamorionLabs/refresh/aws"
-  version = "0.1.0"
-
-  prefix = "myapp-refresh"
-
-  source_account_id       = "111111111111"  # Production
-  destination_account_ids = ["222222222222", "333333333333"]  # Staging, Dev
-
-  tags = {
-    Project     = "database-refresh"
-    Environment = "shared-services"
-  }
-}
-```
-
-### Source Account Module
+### Step 1: Source Account (Production)
 
 Deploy in your production account to grant snapshot/backup access:
 
 ```hcl
+# deployments/production/main.tf
+
 module "refresh_source" {
   source  = "KamorionLabs/refresh/aws//modules/source-account"
-  version = "0.1.0"
+  version = "0.2.0"
 
-  prefix               = "myapp-refresh"
+  prefix                = "myapp-refresh"
   orchestrator_role_arn = "arn:aws:iam::000000000000:role/myapp-refresh-orchestrator"
-
-  # Optional: Use existing role
-  # create_role       = false
-  # existing_role_arn = "arn:aws:iam::111111111111:role/existing-role"
 
   # Optional: Restrict KMS keys
   kms_key_arns = [
@@ -87,18 +86,42 @@ module "refresh_source" {
     Environment = "production"
   }
 }
+
+output "role_arn" {
+  value = module.refresh_source.role_arn
+}
 ```
 
-### Destination Account Module
+**Using an existing role:**
+
+```hcl
+module "refresh_source" {
+  source  = "KamorionLabs/refresh/aws//modules/source-account"
+  version = "0.2.0"
+
+  prefix                = "myapp-refresh"
+  orchestrator_role_arn = "arn:aws:iam::000000000000:role/myapp-refresh-orchestrator"
+
+  # Use existing role instead of creating one
+  create_role       = false
+  existing_role_arn = "arn:aws:iam::111111111111:role/my-existing-role"
+  existing_role_name = "my-existing-role"
+  attach_policies   = true  # Attach refresh policies to existing role
+}
+```
+
+### Step 2: Destination Account(s) (Staging, Dev, etc.)
 
 Deploy in each non-production account:
 
 ```hcl
+# deployments/staging/main.tf
+
 module "refresh_destination" {
   source  = "KamorionLabs/refresh/aws//modules/destination-account"
-  version = "0.1.0"
+  version = "0.2.0"
 
-  prefix               = "myapp-refresh"
+  prefix                = "myapp-refresh"
   orchestrator_role_arn = "arn:aws:iam::000000000000:role/myapp-refresh-orchestrator"
 
   # Lambda configuration
@@ -116,14 +139,66 @@ module "refresh_destination" {
   eks_cluster_name        = "my-cluster"
   eks_access_policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
 
-  # Optional: Use existing role
-  # create_role        = false
-  # existing_role_arn  = "arn:aws:iam::222222222222:role/existing-role"
-  # existing_role_name = "existing-role"
-
   tags = {
     Project     = "database-refresh"
     Environment = "staging"
+  }
+}
+
+output "role_arn" {
+  value = module.refresh_destination.role_arn
+}
+```
+
+**Using an existing role:**
+
+```hcl
+module "refresh_destination" {
+  source  = "KamorionLabs/refresh/aws//modules/destination-account"
+  version = "0.2.0"
+
+  prefix                = "myapp-refresh"
+  orchestrator_role_arn = "arn:aws:iam::000000000000:role/myapp-refresh-orchestrator"
+
+  # Use existing role
+  create_role        = false
+  existing_role_arn  = "arn:aws:iam::222222222222:role/my-existing-role"
+  existing_role_name = "my-existing-role"
+  attach_policies    = true
+
+  # Lambda and other config...
+  deploy_lambdas = true
+  vpc_id         = "vpc-xxx"
+  subnet_ids     = ["subnet-xxx", "subnet-yyy"]
+}
+```
+
+### Step 3: Shared Services Account (Orchestrator)
+
+Deploy after the source and destination roles exist:
+
+```hcl
+# deployments/shared-services/main.tf
+
+module "refresh" {
+  source  = "KamorionLabs/refresh/aws"
+  version = "0.2.0"
+
+  prefix = "myapp-refresh"
+
+  # Pass the ARNs of roles created in step 1 and 2
+  source_role_arns = [
+    "arn:aws:iam::111111111111:role/myapp-refresh-source-role"
+  ]
+
+  destination_role_arns = [
+    "arn:aws:iam::222222222222:role/myapp-refresh-destination-role",  # staging
+    "arn:aws:iam::333333333333:role/myapp-refresh-destination-role"   # dev
+  ]
+
+  tags = {
+    Project     = "database-refresh"
+    Environment = "shared-services"
   }
 }
 ```
@@ -180,25 +255,24 @@ module "refresh_destination" {
 | `run_archive_job` | Run archive/backup job |
 | `tag_resources` | Tag AWS resources |
 
-## Inputs
+## Root Module Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | `prefix` | Prefix for all resource names | `string` | `"refresh"` | no |
 | `tags` | Tags to apply to all resources | `map(string)` | `{}` | no |
-| `source_account_id` | AWS Account ID of the source (production) account | `string` | - | yes |
-| `destination_account_ids` | List of AWS Account IDs for destination accounts | `list(string)` | - | yes |
-| `use_aws_organization` | Use AWS Organization for trust policies | `bool` | `false` | no |
-| `aws_organization_id` | AWS Organization ID | `string` | `null` | no |
+| `source_role_arns` | List of IAM role ARNs in source accounts | `list(string)` | - | yes |
+| `destination_role_arns` | List of IAM role ARNs in destination accounts | `list(string)` | - | yes |
 | `enable_step_functions_logging` | Enable CloudWatch logging for Step Functions | `bool` | `true` | no |
 | `log_retention_days` | CloudWatch log retention in days | `number` | `30` | no |
 | `enable_xray_tracing` | Enable X-Ray tracing for Step Functions | `bool` | `false` | no |
 
-## Outputs
+## Root Module Outputs
 
 | Name | Description |
 |------|-------------|
 | `orchestrator_role_arn` | ARN of the orchestrator IAM role |
+| `orchestrator_role_name` | Name of the orchestrator IAM role |
 | `orchestrator_arn` | ARN of the main orchestrator Step Function |
 | `orchestrator_name` | Name of the main orchestrator Step Function |
 | `step_functions_db` | Map of database Step Functions ARNs |

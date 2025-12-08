@@ -9,24 +9,16 @@ variable "tags" {
   default     = {}
 }
 
-variable "source_account_id" {
-  description = "Source (production) AWS account ID"
-  type        = string
-}
+# -----------------------------------------------------------------------------
+# Cross-Account Role ARNs
+# -----------------------------------------------------------------------------
 
-variable "destination_account_ids" {
-  description = "List of destination AWS account IDs"
+variable "source_role_arns" {
+  description = "List of IAM role ARNs in source accounts that the orchestrator can assume"
   type        = list(string)
 }
 
-variable "use_aws_organization" {
-  description = "Whether to use AWS Organization for trust policies"
-  type        = bool
-  default     = false
-}
-
-variable "aws_organization_id" {
-  description = "AWS Organization ID (required if use_aws_organization is true)"
-  type        = string
-  default     = null
+variable "destination_role_arns" {
+  description = "List of IAM role ARNs in destination accounts that the orchestrator can assume"
+  type        = list(string)
 }

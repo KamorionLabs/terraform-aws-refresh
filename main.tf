@@ -73,12 +73,8 @@ module "iam" {
   prefix = var.prefix
   tags   = var.tags
 
-  source_account_id       = var.source_account_id
-  destination_account_ids = var.destination_account_ids
-
-  # Optional: AWS Organization
-  use_aws_organization = var.use_aws_organization
-  aws_organization_id  = var.aws_organization_id
+  source_role_arns      = var.source_role_arns
+  destination_role_arns = var.destination_role_arns
 }
 
 # -----------------------------------------------------------------------------

@@ -7,14 +7,9 @@ output "orchestrator_role_arn" {
   value       = module.iam.orchestrator_role_arn
 }
 
-output "source_role_arn" {
-  description = "ARN of the source account IAM role (to be created in source account)"
-  value       = module.iam.source_role_arn
-}
-
-output "destination_role_arn" {
-  description = "ARN of the destination account IAM role (to be created in destination accounts)"
-  value       = module.iam.destination_role_arn
+output "orchestrator_role_name" {
+  description = "Name of the orchestrator IAM role"
+  value       = module.iam.orchestrator_role_name
 }
 
 # -----------------------------------------------------------------------------
