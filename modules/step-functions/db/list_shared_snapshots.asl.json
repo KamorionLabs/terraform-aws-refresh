@@ -1,0 +1,88 @@
+{
+  "Comment": "Lists snapshots shared with the destination account and provides detailed information for troubleshooting and verification.",
+  "StartAt": "ListSharedSnapshots",
+  "States": {
+    "ListSharedSnapshots": {
+      "Type": "Task",
+      "Comment": "List all snapshots shared with destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "IncludeShared": true,
+        "SnapshotType": "shared",
+        "MaxRecords": 100
+      },
+      "ResultPath": "$.SharedSnapshots",
+      "Next": "CheckSnapshotsFound",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ListFailed"
+        }
+      ]
+    },
+    "CheckSnapshotsFound": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.SharedSnapshots.DbClusterSnapshots[0]",
+          "IsPresent": true,
+          "Next": "FilterBySourceAccount"
+        }
+      ],
+      "Default": "PrepareEmptyOutput"
+    },
+    "FilterBySourceAccount": {
+      "Type": "Pass",
+      "Comment": "Filter snapshots by source account if specified",
+      "Parameters": {
+        "FilteredSnapshots.$": "$.SharedSnapshots.DbClusterSnapshots"
+      },
+      "ResultPath": "$.FilterResult",
+      "Next": "FormatSnapshotList"
+    },
+    "FormatSnapshotList": {
+      "Type": "Pass",
+      "Parameters": {
+        "Snapshots.$": "States.Array($.FilterResult.FilteredSnapshots[*].{SnapshotId: DbClusterSnapshotIdentifier, SnapshotArn: DbClusterSnapshotArn, Status: Status, CreateTime: SnapshotCreateTime, Engine: Engine, EngineVersion: EngineVersion, StorageEncrypted: StorageEncrypted, KmsKeyId: KmsKeyId, SourceCluster: DbClusterIdentifier})",
+        "TotalCount.$": "States.ArrayLength($.FilterResult.FilteredSnapshots)"
+      },
+      "ResultPath": "$.FormattedResult",
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "list_shared_snapshots",
+        "TotalSnapshotsFound.$": "$.FormattedResult.TotalCount",
+        "Snapshots.$": "$.FormattedResult.Snapshots",
+        "DestinationAccountId.$": "$.DestinationAccount.AccountId"
+      },
+      "Next": "ListSucceeded"
+    },
+    "PrepareEmptyOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "list_shared_snapshots",
+        "TotalSnapshotsFound": 0,
+        "Snapshots": [],
+        "DestinationAccountId.$": "$.DestinationAccount.AccountId",
+        "Message": "No shared snapshots found in destination account"
+      },
+      "Next": "ListSucceeded"
+    },
+    "ListFailed": {
+      "Type": "Fail",
+      "Error": "ListSharedSnapshotsFailed",
+      "Cause": "Failed to list shared snapshots in destination account"
+    },
+    "ListSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

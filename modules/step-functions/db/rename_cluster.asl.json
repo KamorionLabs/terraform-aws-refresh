@@ -1,0 +1,244 @@
+{
+  "Comment": "Cross-Account Micro-Step-Function to rename an RDS/Aurora cluster and all of its instances dynamically using a prefix.",
+  "StartAt": "CheckExistingTargetCluster",
+  "States": {
+    "CheckExistingTargetCluster": {
+      "Type": "Task",
+      "Comment": "Check if target cluster name already exists from a previous incomplete refresh",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.NewDbClusterIdentifier"
+      },
+      "ResultPath": "$.ExistingTargetCluster",
+      "Next": "DeleteExistingTargetCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ResultPath": null,
+          "Next": "GetClusterInstances"
+        }
+      ]
+    },
+    "DeleteExistingTargetCluster": {
+      "Type": "Task",
+      "Comment": "Delete the existing target cluster to avoid naming conflicts",
+      "Resource": "arn:aws:states:::aws-sdk:rds:deleteDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.NewDbClusterIdentifier",
+        "SkipFinalSnapshot": true
+      },
+      "ResultPath": null,
+      "Next": "WaitTargetClusterDeleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error.DeleteTargetCluster",
+          "Next": "GetClusterInstances"
+        }
+      ]
+    },
+    "WaitTargetClusterDeleted": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckTargetClusterDeleted"
+    },
+    "CheckTargetClusterDeleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.NewDbClusterIdentifier"
+      },
+      "ResultPath": "$.TargetClusterCheck",
+      "Next": "WaitTargetClusterDeleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ResultPath": null,
+          "Next": "GetClusterInstances"
+        }
+      ]
+    },
+    "GetClusterInstances": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultSelector": {
+        "Instances.$": "$.DbClusters[0].DbClusterMembers"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "RenameCluster",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RenameFailed" }]
+    },
+    "RenameCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "NewDBClusterIdentifier.$": "$.NewDbClusterIdentifier",
+        "ApplyImmediately": true
+      },
+      "ResultPath": "$.rename-cluster-result",
+      "Next": "WaitClusterRename",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Rds.InvalidDBClusterStateFault"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "ResultPath": "$.rename-cluster-error",
+          "Next": "RenameFailed"
+        }
+      ]
+    },
+    "WaitClusterRename": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "CheckClusterRenameStatus"
+    },
+    "CheckClusterRenameStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": { "DbClusterIdentifier.$": "$.NewDbClusterIdentifier" },
+      "ResultPath": "$.ClusterStatus",
+      "Next": "IsClusterRenameComplete",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "ResultPath": "$.RenameError",
+        "Next": "WaitClusterRename"
+      }]
+    },
+    "IsClusterRenameComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterStatus.DbClusters[0].Status",
+          "StringEquals": "available",
+          "Next": "RenameInstances"
+        }
+      ],
+      "Default": "WaitClusterRename"
+    },
+    "RenameInstances": {
+      "Type": "Map",
+      "ItemsPath": "$.ClusterInfo.Instances",
+      "ItemSelector": {
+        "OldDbInstanceIdentifier.$": "$$.Map.Item.Value.DbInstanceIdentifier",
+        "NewDbInstanceIdentifier.$": "States.Format('{}-{}', $.NewInstanceIdentifierPrefix, $$.Map.Item.Index)",
+        "DestinationAccount.$": "$.DestinationAccount"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "RenameInstance",
+        "States": {
+          "RenameInstance": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBInstance",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.OldDbInstanceIdentifier",
+              "NewDBInstanceIdentifier.$": "$.NewDbInstanceIdentifier",
+              "ApplyImmediately": true
+            },
+            "ResultPath": null,
+            "Next": "WaitInstanceRename",
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "InstanceRenameFailed" }]
+          },
+          "WaitInstanceRename": {
+            "Type": "Wait",
+            "Seconds": 20,
+            "Next": "CheckInstanceRenameStatus"
+          },
+          "CheckInstanceRenameStatus": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:describeDBInstances",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "Parameters": { "DbInstanceIdentifier.$": "$.NewDbInstanceIdentifier" },
+            "ResultPath": "$.InstanceStatus",
+            "Next": "IsInstanceRenameComplete",
+            "Catch": [{
+              "ErrorEquals": ["Rds.DbInstanceNotFoundException", "Rds.DBInstanceNotFoundException", "Rds.DBInstanceNotFoundFault"],
+              "ResultPath": "$.InstanceRenameError",
+              "Next": "WaitInstanceRename"
+            }]
+          },
+          "IsInstanceRenameComplete": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.InstanceStatus.DbInstances[0].DbInstanceStatus",
+                "StringEquals": "available",
+                "Next": "InstanceRenameSucceeded"
+              }
+            ],
+            "Default": "WaitInstanceRename"
+          },
+          "InstanceRenameFailed": { "Type": "Fail" },
+          "InstanceRenameSucceeded": {
+            "Type": "Pass",
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.InstanceStatus.DbInstances[0].DbInstanceIdentifier",
+              "DbInstanceArn.$": "$.InstanceStatus.DbInstances[0].DbInstanceArn"
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "PrepareOutput",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RenameFailed" }],
+      "ResultPath": "$.MapResult"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "rename_cluster",
+        "PrimaryIdentifier.$": "$.NewDbClusterIdentifier",
+        "DbClusterArn.$": "$.ClusterStatus.DbClusters[0].DbClusterArn",
+        "InstanceIdentifiers.$": "$.MapResult[*].DbInstanceIdentifier",
+        "InstanceArns.$": "$.MapResult[*].DbInstanceArn"
+      },
+      "Next": "RenameSucceeded"
+    },
+    "RenameFailed": {
+      "Type": "Fail",
+      "Error": "RenameFailed",
+      "Cause": "The cluster/instance rename process failed."
+    },
+    "RenameSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

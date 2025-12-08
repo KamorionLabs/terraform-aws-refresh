@@ -1,0 +1,449 @@
+{
+  "Comment": "Cross-Account Micro-Step-Function to restore an RDS/Aurora cluster either from a snapshot or point-in-time, handling standard and serverless cases. Supports cross-account snapshot restore.",
+  "StartAt": "CheckExistingRestoreCluster",
+  "States": {
+    "CheckExistingRestoreCluster": {
+      "Type": "Task",
+      "Comment": "Check if a -restore cluster already exists from a previous incomplete refresh",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier"
+      },
+      "ResultPath": "$.ExistingRestoreCluster",
+      "Next": "DeleteExistingRestoreCluster",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ResultPath": null,
+          "Next": "ChooseRestoreType"
+        }
+      ]
+    },
+    "DeleteExistingRestoreCluster": {
+      "Type": "Task",
+      "Comment": "Delete the existing -restore cluster to avoid conflicts",
+      "Resource": "arn:aws:states:::aws-sdk:rds:deleteDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
+        "SkipFinalSnapshot": true
+      },
+      "ResultPath": null,
+      "Next": "WaitRestoreClusterDeleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error.DeleteRestoreCluster",
+          "Next": "ChooseRestoreType"
+        }
+      ]
+    },
+    "WaitRestoreClusterDeleted": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckRestoreClusterDeleted"
+    },
+    "CheckRestoreClusterDeleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier"
+      },
+      "ResultPath": "$.RestoreClusterCheck",
+      "Next": "WaitRestoreClusterDeleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ResultPath": null,
+          "Next": "ChooseRestoreType"
+        }
+      ]
+    },
+    "ChooseRestoreType": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.RestoreType",
+          "StringEquals": "from-snapshot",
+          "Next": "GetLatestSnapshot"
+        },
+        {
+          "Variable": "$.RestoreType",
+          "StringEquals": "point-in-time",
+          "Next": "ChoosePointInTimeMethod"
+        },
+        {
+          "Variable": "$.RestoreType",
+          "StringEquals": "fast-clone",
+          "Next": "RestoreClusterFastClone"
+        }
+      ],
+      "Default": "InvalidRestoreType"
+    },
+    "ChoosePointInTimeMethod": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.UseLatestRestorableTime",
+          "BooleanEquals": true,
+          "Next": "RestoreClusterToPointInTime"
+        }
+      ],
+      "Default": "RestoreClusterToSpecificTime"
+    },
+    "GetLatestSnapshot": {
+      "Type": "Task",
+      "Comment": "Get latest snapshot from source account (cross-account)",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.SourceDBClusterIdentifier"
+      },
+      "ResultSelector": {
+        "SnapshotIdentifier.$": "$.DbClusterSnapshots[4].DbClusterSnapshotIdentifier",
+        "SnapshotArn.$": "$.DbClusterSnapshots[4].DbClusterSnapshotArn",
+        "SnapshotCreateTime.$": "$.DbClusterSnapshots[4].SnapshotCreateTime",
+        "EngineVersion.$": "$.DbClusterSnapshots[4].EngineVersion"
+      },
+      "ResultPath": "$.SnapshotInfo",
+      "Next": "ShareSnapshotWithDestination",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "ResultPath": "$.Error.SnapshotRetrieval",
+        "Next": "RestoreFailed"
+      }]
+    },
+    "ShareSnapshotWithDestination": {
+      "Type": "Task",
+      "Comment": "Share snapshot with destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBClusterSnapshotAttribute",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotInfo.SnapshotIdentifier",
+        "AttributeName": "restore",
+        "ValuesToAdd.$": "States.Array($.DestinationAccount.AccountId)"
+      },
+      "ResultPath": "$.ShareResult",
+      "Next": "WaitSnapshotShared",
+      "Catch": [{
+        "ErrorEquals": ["States.ALL"],
+        "ResultPath": "$.Error.SnapshotSharing",
+        "Next": "RestoreFailed"
+      }]
+    },
+    "WaitSnapshotShared": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Comment": "Wait for snapshot sharing to propagate",
+      "Next": "IsServerless"
+    },
+    "IsServerless": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.DbInstanceClass",
+          "StringEquals": "db.serverless",
+          "Next": "RestoreServerlessClusterFromSnapshot"
+        }
+      ],
+      "Default": "RestoreStandardClusterFromSnapshot"
+    },
+    "RestoreStandardClusterFromSnapshot": {
+      "Type": "Task",
+      "Comment": "Restore cluster from shared snapshot in destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterFromSnapshot",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
+        "SnapshotIdentifier.$": "$.SnapshotInfo.SnapshotArn",
+        "Engine": "aurora-mysql",
+        "EngineVersion.$": "$.SnapshotInfo.EngineVersion",
+        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
+        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
+        "KmsKeyId.$": "$.KmsKeyId",
+        "CopyTagsToSnapshot": true,
+        "EnableIAMDatabaseAuthentication": "False",
+        "EnableCloudwatchLogsExports": [
+          "audit",
+          "error",
+          "general",
+          "slowquery"
+        ],
+        "DeletionProtection": false
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Next": "WaitClusterRestore",
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+    },
+    "RestoreServerlessClusterFromSnapshot": {
+      "Type": "Task",
+      "Comment": "Restore serverless cluster from shared snapshot in destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterFromSnapshot",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
+        "SnapshotIdentifier.$": "$.SnapshotInfo.SnapshotArn",
+        "Engine": "aurora-mysql",
+        "EngineVersion.$": "$.SnapshotInfo.EngineVersion",
+        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
+        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
+        "KmsKeyId.$": "$.KmsKeyId",
+        "ServerlessV2ScalingConfiguration": {
+          "MinCapacity.$": "$.AuroraServerlessMinCapacity",
+          "MaxCapacity.$": "$.AuroraServerlessMaxCapacity"
+        },
+        "CopyTagsToSnapshot": true,
+        "EnableIAMDatabaseAuthentication": false,
+        "EnableCloudwatchLogsExports": [
+          "audit",
+          "error",
+          "general",
+          "slowquery"
+        ],
+        "DeletionProtection": false
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Next": "WaitClusterRestore",
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+    },
+    "RestoreClusterToPointInTime": {
+      "Type": "Task",
+      "Comment": "Point-in-time restore within destination account (not cross-account)",
+      "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
+        "RestoreType": "full-copy",
+        "UseLatestRestorableTime": true,
+        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
+        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
+        "Port.$": "$.Port",
+        "KmsKeyId.$": "$.KmsKeyId",
+        "CopyTagsToSnapshot": true,
+        "EnableIAMDatabaseAuthentication": "False",
+        "EnableCloudwatchLogsExports": [
+          "audit",
+          "error",
+          "general",
+          "slowquery"
+        ],
+        "DeletionProtection": false
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Next": "WaitClusterRestore",
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+    },
+    "RestoreClusterToSpecificTime": {
+      "Type": "Task",
+      "Comment": "Point-in-time restore to specific time within destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
+        "RestoreType": "full-copy",
+        "RestoreToTime.$": "$.RestoreToTime",
+        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
+        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
+        "Port.$": "$.Port",
+        "KmsKeyId.$": "$.KmsKeyId",
+        "CopyTagsToSnapshot": true,
+        "EnableIAMDatabaseAuthentication": false,
+        "EnableCloudwatchLogsExports": [
+          "audit",
+          "error",
+          "general",
+          "slowquery"
+        ],
+        "DeletionProtection": false
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Next": "WaitClusterRestore",
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+    },
+    "RestoreClusterFastClone": {
+      "Type": "Task",
+      "Comment": "Fast clone within destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:restoreDBClusterToPointInTime",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "SourceDBClusterIdentifier.$": "$.SourceDBClusterIdentifier",
+        "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier",
+        "RestoreType": "copy-on-write",
+        "UseLatestRestorableTime": true,
+        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+        "VpcSecurityGroupIds.$": "$.VpcSecurityGroupIds",
+        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
+        "Port.$": "$.Port",
+        "KmsKeyId.$": "$.KmsKeyId",
+        "CopyTagsToSnapshot": true,
+        "EnableIAMDatabaseAuthentication": false,
+        "EnableCloudwatchLogsExports": [
+          "audit",
+          "error",
+          "general",
+          "slowquery"
+        ],
+        "DeletionProtection": false
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Next": "WaitClusterRestore",
+      "ResultPath": null,
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.SnapshotNotFoundFault"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5
+        },
+        {
+          "ErrorEquals": ["States.TaskFailed"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "RestoreFailed" }]
+    },
+    "WaitClusterRestore": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckClusterStatus"
+    },
+    "CheckClusterStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": { "DbClusterIdentifier.$": "$.TmpDbClusterIdentifier" },
+      "ResultPath": "$.ClusterStatus",
+      "Next": "IsClusterAvailable"
+    },
+    "IsClusterAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterStatus.DbClusters[0].Status",
+          "StringEquals": "available",
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "WaitClusterRestore"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "restore_cluster",
+        "PrimaryIdentifier.$": "$.TmpDbClusterIdentifier"
+      },
+      "Next": "RestoreSucceeded"
+    },
+    "InvalidRestoreType": {
+      "Type": "Fail",
+      "Error": "InvalidRestoreType",
+      "Cause": "The 'RestoreType' parameter must be 'from-snapshot', 'point-in-time', or 'fast-clone'."
+    },
+    "RestoreFailed": {
+      "Type": "Fail",
+      "Error": "RestoreFailed",
+      "Cause": "The database cluster restore process failed."
+    },
+    "RestoreSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "Comment": "Cross-account version: Checks if a cluster is available, starts it if it's stopped, and waits for it to become available.",
+  "StartAt": "CheckClusterStatus",
+  "States": {
+    "CheckClusterStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.ClusterStatus",
+      "Next": "IsClusterAvailable"
+    },
+    "IsClusterAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterStatus.DbClusters[0].Status",
+          "StringEquals": "available",
+          "Next": "PrepareOutput"
+        },
+        {
+          "Variable": "$.ClusterStatus.DbClusters[0].Status",
+          "StringEquals": "stopped",
+          "Next": "StartCluster"
+        }
+      ],
+      "Default": "WaitAndRetry"
+    },
+    "StartCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:startDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.StartClusterResult",
+      "Next": "WaitAndRetry",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "ProcessFailed" }]
+    },
+    "WaitAndRetry": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckClusterStatus"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "ensure_cluster_available",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "Next": "ProcessSucceeded"
+    },
+    "ProcessFailed": {
+      "Type": "Fail"
+    },
+    "ProcessSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

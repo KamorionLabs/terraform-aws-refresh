@@ -1,0 +1,217 @@
+{
+  "Comment": "Cross-account snapshot sharing utility. Shares an RDS snapshot from source account to destination account(s) with optional KMS grant creation for encrypted snapshots.",
+  "StartAt": "CheckSnapshotExists",
+  "States": {
+    "CheckSnapshotExists": {
+      "Type": "Task",
+      "Comment": "Verify snapshot exists in source account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotIdentifier"
+      },
+      "ResultSelector": {
+        "SnapshotArn.$": "$.DbClusterSnapshots[0].DbClusterSnapshotArn",
+        "SnapshotStatus.$": "$.DbClusterSnapshots[0].Status",
+        "StorageEncrypted.$": "$.DbClusterSnapshots[0].StorageEncrypted",
+        "KmsKeyId.$": "$.DbClusterSnapshots[0].KmsKeyId"
+      },
+      "ResultPath": "$.SnapshotInfo",
+      "Next": "IsSnapshotAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterSnapshotNotFoundFault"],
+          "ResultPath": "$.Error",
+          "Next": "SnapshotNotFound"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ShareFailed"
+        }
+      ]
+    },
+    "IsSnapshotAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.SnapshotInfo.SnapshotStatus",
+          "StringEquals": "available",
+          "Next": "IsSnapshotEncrypted"
+        }
+      ],
+      "Default": "WaitForSnapshotAvailable"
+    },
+    "WaitForSnapshotAvailable": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Comment": "Wait for snapshot to become available",
+      "Next": "CheckSnapshotExists"
+    },
+    "IsSnapshotEncrypted": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.SnapshotInfo.StorageEncrypted",
+          "BooleanEquals": true,
+          "Next": "CreateKMSGrant"
+        }
+      ],
+      "Default": "ShareSnapshot"
+    },
+    "CreateKMSGrant": {
+      "Type": "Task",
+      "Comment": "Create KMS grant to allow destination account to decrypt snapshot",
+      "Resource": "arn:aws:states:::aws-sdk:kms:createGrant",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "KeyId.$": "$.SnapshotInfo.KmsKeyId",
+        "GranteePrincipal.$": "States.Format('arn:aws:iam::{}:role/RefreshDestinationRole', $.DestinationAccount.AccountId)",
+        "Operations": [
+          "Decrypt",
+          "CreateGrant",
+          "DescribeKey"
+        ],
+        "Constraints": {
+          "EncryptionContextSubset": {
+            "aws:rds:db-snapshot-id.$": "$.SnapshotIdentifier"
+          }
+        }
+      },
+      "ResultPath": "$.KmsGrantResult",
+      "Next": "ShareSnapshot",
+      "Catch": [
+        {
+          "ErrorEquals": ["Kms.AlreadyExistsException"],
+          "ResultPath": "$.KmsGrantWarning",
+          "Comment": "Grant already exists, continue",
+          "Next": "ShareSnapshot"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ShareFailed"
+        }
+      ]
+    },
+    "ShareSnapshot": {
+      "Type": "Task",
+      "Comment": "Share snapshot with destination account(s)",
+      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBClusterSnapshotAttribute",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotIdentifier",
+        "AttributeName": "restore",
+        "ValuesToAdd.$": "States.Array($.DestinationAccount.AccountId)"
+      },
+      "ResultPath": "$.ShareResult",
+      "Next": "WaitForSharePropagation",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Rds.InvalidDBClusterSnapshotStateFault",
+            "States.TaskFailed"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ShareFailed"
+        }
+      ]
+    },
+    "WaitForSharePropagation": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Comment": "Wait for snapshot sharing to propagate",
+      "Next": "VerifySnapshotShared"
+    },
+    "VerifySnapshotShared": {
+      "Type": "Task",
+      "Comment": "Verify snapshot is visible in destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotInfo.SnapshotArn",
+        "IncludeShared": true
+      },
+      "ResultSelector": {
+        "SnapshotVisible": true,
+        "SnapshotArn.$": "$.DbClusterSnapshots[0].DbClusterSnapshotArn"
+      },
+      "ResultPath": "$.VerificationResult",
+      "Next": "PrepareOutput",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Rds.DBClusterSnapshotNotFoundFault"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5,
+          "Comment": "Retry if snapshot not yet visible in destination"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.VerificationError",
+          "Next": "PrepareOutputWithWarning"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "share_snapshot",
+        "SnapshotIdentifier.$": "$.SnapshotIdentifier",
+        "SnapshotArn.$": "$.SnapshotInfo.SnapshotArn",
+        "SharedWith.$": "States.Array($.DestinationAccount.AccountId)",
+        "StorageEncrypted.$": "$.SnapshotInfo.StorageEncrypted",
+        "KmsGrantCreated.$": "States.StringToJson(States.Format('{}', $.KmsGrantResult.GrantId))",
+        "VerificationResult.$": "$.VerificationResult"
+      },
+      "Next": "ShareSucceeded"
+    },
+    "PrepareOutputWithWarning": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "CompletedWithWarning",
+        "ModuleName": "share_snapshot",
+        "SnapshotIdentifier.$": "$.SnapshotIdentifier",
+        "SnapshotArn.$": "$.SnapshotInfo.SnapshotArn",
+        "SharedWith.$": "States.Array($.DestinationAccount.AccountId)",
+        "StorageEncrypted.$": "$.SnapshotInfo.StorageEncrypted",
+        "Warning": "Snapshot shared but verification in destination account failed"
+      },
+      "Next": "ShareSucceeded"
+    },
+    "SnapshotNotFound": {
+      "Type": "Fail",
+      "Error": "SnapshotNotFound",
+      "Cause": "The specified snapshot does not exist in the source account"
+    },
+    "ShareFailed": {
+      "Type": "Fail",
+      "Error": "ShareFailed",
+      "Cause": "Failed to share snapshot with destination account"
+    },
+    "ShareSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

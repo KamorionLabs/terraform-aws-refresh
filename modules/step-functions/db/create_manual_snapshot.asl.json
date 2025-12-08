@@ -1,0 +1,266 @@
+{
+  "Comment": "Creates a manual RDS cluster snapshot in the source account before cross-account sharing. Useful to ensure a consistent snapshot at a specific point in time.",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.DbClusterIdentifier",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.SnapshotIdentifier",
+              "IsPresent": true
+            }
+          ],
+          "Next": "CheckClusterExists"
+        }
+      ],
+      "Default": "InvalidInput"
+    },
+    "CheckClusterExists": {
+      "Type": "Task",
+      "Comment": "Verify cluster exists in source account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultSelector": {
+        "Status.$": "$.DbClusters[0].Status",
+        "EngineVersion.$": "$.DbClusters[0].EngineVersion",
+        "StorageEncrypted.$": "$.DbClusters[0].StorageEncrypted",
+        "KmsKeyId.$": "$.DbClusters[0].KmsKeyId"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "IsClusterAvailable",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault"],
+          "ResultPath": "$.Error",
+          "Next": "ClusterNotFound"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SnapshotFailed"
+        }
+      ]
+    },
+    "IsClusterAvailable": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.Status",
+          "StringEquals": "available",
+          "Next": "CreateSnapshot"
+        }
+      ],
+      "Default": "ClusterNotAvailable"
+    },
+    "CreateSnapshot": {
+      "Type": "Task",
+      "Comment": "Create manual snapshot of the cluster",
+      "Resource": "arn:aws:states:::aws-sdk:rds:createDBClusterSnapshot",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotIdentifier",
+        "Tags": [
+          {
+            "Key": "CreatedBy",
+            "Value": "RefreshOrchestrator"
+          },
+          {
+            "Key": "Purpose",
+            "Value": "CrossAccountRefresh"
+          },
+          {
+            "Key": "SourceCluster",
+            "Value.$": "$.DbClusterIdentifier"
+          },
+          {
+            "Key": "CreatedAt",
+            "Value.$": "$$.State.EnteredTime"
+          }
+        ]
+      },
+      "ResultSelector": {
+        "SnapshotArn.$": "$.DbClusterSnapshot.DbClusterSnapshotArn",
+        "SnapshotIdentifier.$": "$.DbClusterSnapshot.DbClusterSnapshotIdentifier",
+        "Status.$": "$.DbClusterSnapshot.Status",
+        "SnapshotCreateTime.$": "$.DbClusterSnapshot.SnapshotCreateTime",
+        "StorageEncrypted.$": "$.DbClusterSnapshot.StorageEncrypted",
+        "KmsKeyId.$": "$.DbClusterSnapshot.KmsKeyId"
+      },
+      "ResultPath": "$.SnapshotResult",
+      "Next": "WaitForSnapshot",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Rds.SnapshotQuotaExceededFault"
+          ],
+          "IntervalSeconds": 60,
+          "MaxAttempts": 3,
+          "BackoffRate": 1,
+          "Comment": "Wait if quota exceeded"
+        },
+        {
+          "ErrorEquals": [
+            "Rds.InvalidDBClusterStateFault"
+          ],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 5,
+          "BackoffRate": 1.5,
+          "Comment": "Wait if cluster not in valid state"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterSnapshotAlreadyExistsFault"],
+          "ResultPath": "$.Error",
+          "Next": "SnapshotAlreadyExists"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SnapshotFailed"
+        }
+      ]
+    },
+    "WaitForSnapshot": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Comment": "Wait for snapshot creation to progress",
+      "Next": "CheckSnapshotStatus"
+    },
+    "CheckSnapshotStatus": {
+      "Type": "Task",
+      "Comment": "Check snapshot creation status",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotIdentifier"
+      },
+      "ResultSelector": {
+        "Status.$": "$.DbClusterSnapshots[0].Status",
+        "PercentProgress.$": "$.DbClusterSnapshots[0].PercentProgress",
+        "SnapshotArn.$": "$.DbClusterSnapshots[0].DbClusterSnapshotArn"
+      },
+      "ResultPath": "$.SnapshotStatus",
+      "Next": "IsSnapshotComplete",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "SnapshotFailed"
+        }
+      ]
+    },
+    "IsSnapshotComplete": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.SnapshotStatus.Status",
+          "StringEquals": "available",
+          "Next": "PrepareOutput"
+        },
+        {
+          "Or": [
+            {
+              "Variable": "$.SnapshotStatus.Status",
+              "StringEquals": "failed"
+            },
+            {
+              "Variable": "$.SnapshotStatus.Status",
+              "StringEquals": "deleted"
+            }
+          ],
+          "Next": "SnapshotFailed"
+        }
+      ],
+      "Default": "WaitForSnapshot"
+    },
+    "SnapshotAlreadyExists": {
+      "Type": "Task",
+      "Comment": "Snapshot already exists, get its details",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusterSnapshots",
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterSnapshotIdentifier.$": "$.SnapshotIdentifier"
+      },
+      "ResultSelector": {
+        "SnapshotArn.$": "$.DbClusterSnapshots[0].DbClusterSnapshotArn",
+        "SnapshotIdentifier.$": "$.DbClusterSnapshots[0].DbClusterSnapshotIdentifier",
+        "Status.$": "$.DbClusterSnapshots[0].Status",
+        "StorageEncrypted.$": "$.DbClusterSnapshots[0].StorageEncrypted",
+        "KmsKeyId.$": "$.DbClusterSnapshots[0].KmsKeyId"
+      },
+      "ResultPath": "$.SnapshotResult",
+      "Next": "PrepareOutputAlreadyExists"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "create_manual_snapshot",
+        "SnapshotIdentifier.$": "$.SnapshotIdentifier",
+        "SnapshotArn.$": "$.SnapshotResult.SnapshotArn",
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "StorageEncrypted.$": "$.SnapshotResult.StorageEncrypted",
+        "KmsKeyId.$": "$.SnapshotResult.KmsKeyId",
+        "Action": "created"
+      },
+      "Next": "SnapshotSucceeded"
+    },
+    "PrepareOutputAlreadyExists": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "CompletedWithWarning",
+        "ModuleName": "create_manual_snapshot",
+        "SnapshotIdentifier.$": "$.SnapshotIdentifier",
+        "SnapshotArn.$": "$.SnapshotResult.SnapshotArn",
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "StorageEncrypted.$": "$.SnapshotResult.StorageEncrypted",
+        "KmsKeyId.$": "$.SnapshotResult.KmsKeyId",
+        "Action": "already_exists",
+        "Warning": "Snapshot already exists, using existing snapshot"
+      },
+      "Next": "SnapshotSucceeded"
+    },
+    "InvalidInput": {
+      "Type": "Fail",
+      "Error": "InvalidInput",
+      "Cause": "Required parameters missing: DbClusterIdentifier and SnapshotIdentifier are required"
+    },
+    "ClusterNotFound": {
+      "Type": "Fail",
+      "Error": "ClusterNotFound",
+      "Cause": "The specified cluster does not exist in the source account"
+    },
+    "ClusterNotAvailable": {
+      "Type": "Fail",
+      "Error": "ClusterNotAvailable",
+      "Cause": "The cluster is not in 'available' state and cannot be snapshotted at this time"
+    },
+    "SnapshotFailed": {
+      "Type": "Fail",
+      "Error": "SnapshotCreationFailed",
+      "Cause": "Failed to create manual snapshot of the cluster"
+    },
+    "SnapshotSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

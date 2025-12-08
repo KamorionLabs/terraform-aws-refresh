@@ -1,0 +1,80 @@
+{
+  "Comment": "Cross-account version: Ensures a cluster does not exist by deleting it if present. Used to clean up leftover clusters from previous failed refreshes.",
+  "StartAt": "Check Cluster Exists",
+  "States": {
+    "Check Cluster Exists": {
+      "Type": "Task",
+      "Comment": "Check if the cluster exists in destination account",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.ClusterCheck",
+      "Next": "Cluster Exists - Delete It",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "ResultPath": null,
+          "Comment": "Cluster doesn't exist - perfect, nothing to do",
+          "Next": "PrepareOutputNoCluster"
+        }
+      ]
+    },
+    "Cluster Exists - Delete It": {
+      "Type": "Task",
+      "Comment": "Cluster exists from previous failed refresh - delete it to ensure clean state",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterNotExists')",
+        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.Database.DeleteCluster)",
+        "Input": {
+          "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+          "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.DeleteResult",
+      "Next": "PrepareOutputClusterDeleted",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DeleteError",
+          "Next": "DeletionFailed"
+        }
+      ]
+    },
+    "PrepareOutputClusterDeleted": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "ensure_cluster_not_exists",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier",
+        "Action": "deleted",
+        "ClusterExisted": true
+      },
+      "Next": "EnsureSucceeded"
+    },
+    "PrepareOutputNoCluster": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "ensure_cluster_not_exists",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier",
+        "Action": "none",
+        "ClusterExisted": false
+      },
+      "Next": "EnsureSucceeded"
+    },
+    "DeletionFailed": {
+      "Type": "Fail",
+      "Error": "EnsureClusterNotExistsFailed",
+      "Cause": "Failed to delete existing cluster to ensure clean state"
+    },
+    "EnsureSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

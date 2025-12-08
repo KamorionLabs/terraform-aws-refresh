@@ -1,0 +1,149 @@
+{
+  "Comment": "Cross-account version: Executes SQL scripts from S3 on any database cluster.",
+  "StartAt": "CheckIfScriptsExist",
+  "States": {
+    "CheckIfScriptsExist": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.S3Bucket",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.S3Prefix",
+              "IsPresent": true
+            }
+          ],
+          "Next": "ListS3Objects"
+        }
+      ],
+      "Default": "NoScriptsToRun"
+    },
+    "ListS3Objects": {
+      "Type": "Task",
+      "Comment": "List SQL scripts in S3 bucket",
+      "Resource": "arn:aws:states:::aws-sdk:s3:listObjectsV2",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "Bucket.$": "$.S3Bucket",
+        "Prefix.$": "$.S3Prefix"
+      },
+      "ResultPath": "$.S3Objects",
+      "Next": "CheckS3ObjectsFound",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "ExecutionFailed"
+        }
+      ]
+    },
+    "CheckS3ObjectsFound": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.S3Objects.Contents[0]",
+          "IsPresent": true,
+          "Next": "RunSqlScripts"
+        }
+      ],
+      "Default": "NoScriptsToRun"
+    },
+    "RunSqlScripts": {
+      "Type": "Map",
+      "ItemsPath": "$.S3Objects.Contents",
+      "ItemSelector": {
+        "ClusterIdentifier.$": "$.DbClusterIdentifier",
+        "DatabaseName.$": "$.DatabaseName",
+        "SecretArn.$": "$.MasterUserSecretArn",
+        "S3Bucket.$": "$.S3Bucket",
+        "S3Key.$": "$$.Map.Item.Value.Key",
+        "LambdaFunctionName.$": "$.LambdaFunctionName",
+        "ExportResults.$": "$.ExportResults",
+        "ExportBucket.$": "$.ExportBucket",
+        "ExportPrefix.$": "$.ExportPrefix",
+        "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "MaxConcurrency": 1,
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "InvokeSqlLambda",
+        "States": {
+          "InvokeSqlLambda": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "OutputPath": "$.Payload",
+            "Parameters": {
+              "FunctionName.$": "$.LambdaFunctionName",
+              "Payload": {
+                "cluster.$": "$.ClusterIdentifier",
+                "dbname.$": "$.DatabaseName",
+                "secretname.$": "$.SecretArn",
+                "bucketname.$": "$.S3Bucket",
+                "key.$": "$.S3Key",
+                "exportResults.$": "$.ExportResults",
+                "exportBucket.$": "$.ExportBucket",
+                "exportPrefix.$": "$.ExportPrefix"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ResourceNotReadyException",
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException",
+                  "Lambda.Unknown"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 6,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "ExecutionFailed"
+        }
+      ],
+      "ResultPath": "$.MapResult"
+    },
+    "NoScriptsToRun": {
+      "Type": "Pass",
+      "Comment": "No SQL scripts to execute",
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "run_sql_from_s3",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "Next": "ExecutionSucceeded"
+    },
+    "ExecutionFailed": {
+      "Type": "Fail",
+      "Error": "ExecutionFailed",
+      "Cause": "The SQL script execution process failed."
+    },
+    "ExecutionSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

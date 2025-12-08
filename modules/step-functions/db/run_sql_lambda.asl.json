@@ -1,0 +1,98 @@
+{
+  "Comment": "Cross-account version: Execute SQL scripts from S3 using Lambda function for database operations",
+  "StartAt": "ValidateInput",
+  "States": {
+    "ValidateInput": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.LambdaArn",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ClusterIdentifier",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.ScriptsLocation",
+              "IsPresent": true
+            }
+          ],
+          "Next": "InvokeSQLLambda"
+        }
+      ],
+      "Default": "InvalidInput"
+    },
+    "InvokeSQLLambda": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "FunctionName.$": "$.LambdaArn",
+        "Payload": {
+          "clusterId.$": "$.ClusterIdentifier",
+          "databaseName.$": "$.DatabaseName",
+          "scriptsLocation.$": "$.ScriptsLocation"
+        }
+      },
+      "ResultPath": "$.LambdaResult",
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Next": "CheckLambdaResult",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ResourceNotReadyException",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.TooManyRequestsException",
+            "Lambda.Unknown"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.LambdaError",
+          "Next": "SQLExecutionFailed"
+        }
+      ]
+    },
+    "CheckLambdaResult": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.LambdaResult.Payload.statusCode",
+          "NumericEquals": 200,
+          "Next": "SQLExecutionSucceeded"
+        },
+        {
+          "Variable": "$.LambdaResult.StatusCode",
+          "NumericEquals": 200,
+          "Next": "SQLExecutionSucceeded"
+        }
+      ],
+      "Default": "SQLExecutionFailed"
+    },
+    "InvalidInput": {
+      "Type": "Fail",
+      "Error": "InvalidInput",
+      "Cause": "Required parameters missing: LambdaArn, ClusterIdentifier, and ScriptsLocation are required"
+    },
+    "SQLExecutionFailed": {
+      "Type": "Fail",
+      "Error": "SQLExecutionFailed",
+      "Cause": "Lambda function failed to execute SQL scripts from S3"
+    },
+    "SQLExecutionSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

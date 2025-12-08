@@ -1,0 +1,95 @@
+{
+  "Comment": "Cross-account version: Associates an IAM Role for S3 access to a cluster and updates the parameter group.",
+  "StartAt": "AddRoleToCluster",
+  "States": {
+    "AddRoleToCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:addRoleToDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "RoleArn.$": "$.RoleArn"
+      },
+      "Next": "ModifyDbClusterParameterGroup",
+      "Catch": [{ "ErrorEquals": ["Rds.DBClusterRoleAlreadyExistsFault"], "Next": "ModifyDbClusterParameterGroup" }]
+    },
+    "ModifyDbClusterParameterGroup": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:modifyDBClusterParameterGroup",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": "$.ModifyResult",
+      "Parameters": {
+        "DbClusterParameterGroupName.$": "$.DbClusterParameterGroupName",
+        "Parameters": [
+          {
+            "ParameterName": "aws_default_s3_role",
+            "ParameterValue.$": "$.RoleArn",
+            "ApplyMethod": "immediate"
+          }
+        ]
+      },
+      "Next": "WaitRoleActive",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.RdsException"],
+          "ResultPath": "$.ModifyError",
+          "Comment": "Non-blocking: if RDS error (e.g. cannot modify default parameter group), continue anyway",
+          "Next": "PrepareOutputWithWarning"
+        }
+      ]
+    },
+    "WaitRoleActive": {
+      "Type": "Wait",
+      "Seconds": 15,
+      "Next": "CheckRoleStatus"
+    },
+    "CheckRoleStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.ClusterStatus",
+      "Next": "IsRoleActive"
+    },
+    "IsRoleActive": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterStatus.DbClusters[0].AssociatedRoles[0].Status",
+          "StringEquals": "ACTIVE",
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "WaitRoleActive"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "configure_s3_integration",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "Next": "ConfigSucceeded"
+    },
+    "PrepareOutputWithWarning": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "CompletedWithWarning",
+        "ModuleName": "configure_s3_integration",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier",
+        "Warning": "Parameter group modification skipped (probably default parameter group)"
+      },
+      "Next": "ConfigSucceeded"
+    },
+    "ConfigSucceeded": { "Type": "Succeed" }
+  }
+}

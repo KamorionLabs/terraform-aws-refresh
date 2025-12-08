@@ -1,0 +1,72 @@
+{
+  "Comment": "Cross-account version: Stops an RDS/Aurora cluster.",
+  "StartAt": "StopCluster",
+  "States": {
+    "StopCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:stopDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.stop-cluster-result",
+      "Next": "WaitClusterStopped",
+      "Retry": [
+        {
+          "ErrorEquals": ["Rds.InvalidDBClusterStateFault"],
+          "IntervalSeconds": 30,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "StopFailed" }]
+    },
+    "WaitClusterStopped": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckClusterStatus"
+    },
+    "CheckClusterStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.ClusterStatus",
+      "Next": "IsClusterStopped"
+    },
+    "IsClusterStopped": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterStatus.DbClusters[0].Status",
+          "StringEquals": "stopped",
+          "Next": "PrepareOutput"
+        }
+      ],
+      "Default": "WaitClusterStopped"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "stop_cluster",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "Next": "StopSucceeded"
+    },
+    "StopFailed": {
+      "Type": "Fail"
+    },
+    "StopSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

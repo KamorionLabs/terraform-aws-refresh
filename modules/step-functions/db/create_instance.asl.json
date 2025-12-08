@@ -1,0 +1,131 @@
+{
+  "Comment": "Cross-account version: Creates DB instances within an existing RDS/Aurora cluster using Map.",
+  "StartAt": "CreateInstances",
+  "States": {
+    "CreateInstances": {
+      "Type": "Map",
+      "ItemsPath": "$.DbInstances",
+      "MaxConcurrency": 1,
+      "ItemSelector": {
+        "DbInstanceIdentifier.$": "States.Format('{}-{}', $.DbInstanceIdentifierPrefix, $$.Map.Item.Index)",
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "DbInstanceClass.$": "$$.Map.Item.Value.DbInstanceClass",
+        "DbParameterGroupName.$": "$.DbParameterGroupName",
+        "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+        "PromotionTier.$": "$$.Map.Item.Value.PromotionTier",
+        "Tags.$": "$.Tags",
+        "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "CreateInstance",
+        "States": {
+          "CreateInstance": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:createDBInstance",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.DbInstanceIdentifier",
+              "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+              "DbInstanceClass.$": "$.DbInstanceClass",
+              "Engine": "aurora-mysql",
+              "DbParameterGroupName.$": "$.DbParameterGroupName",
+              "DbSubnetGroupName.$": "$.DbSubnetGroupName",
+              "PromotionTier.$": "$.PromotionTier",
+              "AutoMinorVersionUpgrade": false,
+              "PubliclyAccessible": false,
+              "CopyTagsToSnapshot": true
+            },
+            "TimeoutSeconds": 300,
+            "HeartbeatSeconds": 60,
+            "ResultPath": null,
+            "Next": "WaitInstance",
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed"],
+                "IntervalSeconds": 5,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "InstanceFailed" }]
+          },
+          "WaitInstance": {
+            "Type": "Wait",
+            "Seconds": 30,
+            "Next": "CheckInstance"
+          },
+          "CheckInstance": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:describeDBInstances",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.DbInstanceIdentifier"
+            },
+            "ResultPath": "$.Status",
+            "Next": "IsInstanceAvailable",
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "WaitInstance" }]
+          },
+          "IsInstanceAvailable": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.Status.DbInstances[0].DbInstanceStatus",
+                "StringEquals": "available",
+                "Next": "TagInstance"
+              }
+            ],
+            "Default": "WaitInstance"
+          },
+          "TagInstance": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:resourcegroupstaggingapi:tagResources",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Parameters": {
+              "ResourceARNList.$": "States.Array($.Status.DbInstances[0].DbInstanceArn)",
+              "Tags.$": "$.Tags"
+            },
+            "ResultPath": null,
+            "Next": "InstanceCreated"
+          },
+          "InstanceCreated": {
+            "Type": "Pass",
+            "End": true
+          },
+          "InstanceFailed": {
+            "Type": "Fail",
+            "Error": "InstanceCreationFailed"
+          }
+        }
+      },
+      "Next": "PrepareOutput",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "CreationFailed" }],
+      "ResultPath": "$.MapResult"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "create_instance",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "Next": "CreationSucceeded"
+    },
+    "CreationFailed": {
+      "Type": "Fail",
+      "Error": "CreationFailed",
+      "Cause": "The database instance creation process failed."
+    },
+    "CreationSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

@@ -1,0 +1,205 @@
+{
+  "Comment": "Cross-Account Micro-Step-Function to safely delete an RDS/Aurora cluster and its instances after checking for a 'refresh' tag.",
+  "StartAt": "GetClusterDetails",
+  "States": {
+    "GetClusterDetails": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultSelector": {
+        "ClusterArn.$": "$.DbClusters[0].DbClusterArn",
+        "Instances.$": "$.DbClusters[0].DbClusterMembers"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "GetClusterTags",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeletionFailed"
+        }
+      ]
+    },
+    "GetClusterTags": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:listTagsForResource",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "ResourceName.$": "$.ClusterInfo.ClusterArn"
+      },
+      "ResultSelector": {
+        "RefreshTagValue.$": "$.TagList[?(@.Key=='refresh')].Value"
+      },
+      "ResultPath": "$.Tags",
+      "Next": "IsRefreshAllowed",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeletionFailed"
+        }
+      ]
+    },
+    "IsRefreshAllowed": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Tags.RefreshTagValue[0]",
+          "StringEquals": "true",
+          "Next": "EnsureClusterAvailable"
+        }
+      ],
+      "Default": "SafetyCheckFailed"
+    },
+    "EnsureClusterAvailable": {
+      "Type": "Task",
+      "Comment": "Ensure cluster is started and available before deletion (handles stopped clusters)",
+      "Resource": "arn:aws:states:::states:startExecution.sync:2",
+      "Parameters": {
+        "Name.$": "States.Format('{}-{}', $.OrchestratorExecutionName, 'EnsureClusterAvailable')",
+        "StateMachineArn.$": "States.Format('arn:aws:states:{}:{}:stateMachine:{}', $.Environment.Region, $.Environment.AccountId, $.StepFunctions.Database.EnsureClusterAvailable)",
+        "Input": {
+          "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+          "OrchestratorExecutionName.$": "$.OrchestratorExecutionName",
+          "Environment.$": "$.Environment",
+          "DestinationAccount.$": "$.DestinationAccount"
+        }
+      },
+      "ResultPath": "$.EnsureClusterResult",
+      "Next": "DeleteInstances",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.EnsureClusterError",
+          "Next": "DeletionFailed"
+        }
+      ]
+    },
+    "DeleteInstances": {
+      "Type": "Map",
+      "ItemsPath": "$.ClusterInfo.Instances",
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "DeleteInstance",
+        "States": {
+          "DeleteInstance": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:deleteDBInstance",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "TimeoutSeconds": 300,
+            "HeartbeatSeconds": 60,
+            "ResultPath": null,
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.DbInstanceIdentifier",
+              "SkipFinalSnapshot": true,
+              "DeleteAutomatedBackups": false
+            },
+            "Next": "WaitInstanceDeletion",
+            "Catch": [ { "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "WaitInstanceDeletion" } ]
+          },
+          "WaitInstanceDeletion": {
+            "Type": "Wait",
+            "Seconds": 30,
+            "Next": "CheckInstanceDeletionStatus"
+          },
+          "CheckInstanceDeletionStatus": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:rds:describeDBInstances",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccount.RoleArn"
+            },
+            "Parameters": {
+              "DbInstanceIdentifier.$": "$.DbInstanceIdentifier"
+            },
+            "ResultPath": "$.InstanceStatusCheck",
+            "Next": "WaitInstanceDeletion",
+            "Catch": [
+              {
+                "ErrorEquals": ["Rds.DBInstanceNotFoundFault", "Rds.DbInstanceNotFoundException"],
+                "Next": "InstanceDeleted"
+              }
+            ]
+          },
+          "InstanceDeleted": {
+            "Type": "Succeed"
+          }
+        }
+      },
+      "ResultPath": "$.MapResult",
+      "Next": "DeleteCluster"
+    },
+    "DeleteCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:deleteDBCluster",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "TimeoutSeconds": 300,
+      "HeartbeatSeconds": 60,
+      "ResultPath": null,
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier",
+        "SkipFinalSnapshot": true
+      },
+      "Next": "WaitClusterDeletion",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "DeletionFailed"
+        }
+      ]
+    },
+    "WaitClusterDeletion": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "CheckClusterDeletionStatus"
+    },
+    "CheckClusterDeletionStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:rds:describeDBClusters",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "DbClusterIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "ResultPath": "$.ClusterStatusCheck",
+      "Next": "WaitClusterDeletion",
+      "Catch": [
+        {
+          "ErrorEquals": ["Rds.DBClusterNotFoundFault", "Rds.DbClusterNotFoundException"],
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "delete_cluster",
+        "PrimaryIdentifier.$": "$.DbClusterIdentifier"
+      },
+      "Next": "DeletionSucceeded"
+    },
+    "SafetyCheckFailed": {
+      "Type": "Fail",
+      "Error": "SafetyCheckFailed",
+      "Cause": "The cluster does not have the 'refresh: true' tag and cannot be deleted by this process."
+    },
+    "DeletionFailed": {
+      "Type": "Fail",
+      "Error": "DeletionFailed",
+      "Cause": "An error occurred while trying to delete the cluster."
+    },
+    "DeletionSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

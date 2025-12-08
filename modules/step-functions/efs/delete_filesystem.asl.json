@@ -1,0 +1,204 @@
+{
+  "Comment": "Cross-account version: Safely deletes an EFS file system and its mount targets after checking for a 'refresh' tag.",
+  "StartAt": "GetFileSystemTags",
+  "States": {
+    "GetFileSystemTags": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeTags",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "ResultSelector": {
+        "RefreshTagValue.$": "$.Tags[?(@.Key=='refresh')].Value"
+      },
+      "ResultPath": "$.Tags",
+      "Next": "IsRefreshAllowed",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DeletionFailed" }]
+    },
+    "IsRefreshAllowed": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.Tags.RefreshTagValue[0]",
+          "StringEquals": "true",
+          "Next": "DescribeAccessPoints"
+        }
+      ],
+      "Default": "SafetyCheckFailed"
+    },
+    "DescribeAccessPoints": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeAccessPoints",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "ResultPath": "$.AccessPoints",
+      "Next": "CheckIfAccessPointsExist",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DescribeMountTargets" }]
+    },
+    "CheckIfAccessPointsExist": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.AccessPoints.AccessPoints[0]",
+          "IsPresent": true,
+          "Next": "DeleteAccessPoints"
+        }
+      ],
+      "Default": "DescribeMountTargets"
+    },
+    "DeleteAccessPoints": {
+      "Type": "Map",
+      "ItemsPath": "$.AccessPoints.AccessPoints",
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "DeleteAccessPoint",
+        "States": {
+          "DeleteAccessPoint": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Parameters": {
+              "AccessPointId.$": "$.AccessPointId"
+            },
+            "End": true,
+            "Catch": [{ "ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ContinueOnError" }]
+          },
+          "ContinueOnError": {
+            "Type": "Pass",
+            "End": true
+          }
+        }
+      },
+      "ItemSelector": {
+        "AccessPointId.$": "$$.Map.Item.Value.AccessPointId",
+        "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitAccessPointsDeleted",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DescribeMountTargets" }]
+    },
+    "WaitAccessPointsDeleted": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "DescribeMountTargets"
+    },
+    "DescribeMountTargets": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeMountTargets",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "ResultPath": "$.MountTargets",
+      "Next": "DeleteMountTargets"
+    },
+    "DeleteMountTargets": {
+      "Type": "Map",
+      "ItemsPath": "$.MountTargets.MountTargets",
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "INLINE" },
+        "StartAt": "DeleteMountTarget",
+        "States": {
+          "DeleteMountTarget": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:efs:deleteMountTarget",
+            "Credentials": {
+              "RoleArn.$": "$.DestinationAccountRoleArn"
+            },
+            "Parameters": {
+              "MountTargetId.$": "$.MountTargetId"
+            },
+            "End": true
+          }
+        }
+      },
+      "ItemSelector": {
+        "MountTargetId.$": "$$.Map.Item.Value.MountTargetId",
+        "DestinationAccountRoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitMountTargetsDeleted",
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DeletionFailed" }]
+    },
+    "WaitMountTargetsDeleted": {
+      "Type": "Wait",
+      "Seconds": 10,
+      "Next": "CheckMountTargetsDeleted"
+    },
+    "CheckMountTargetsDeleted": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeMountTargets",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "ResultPath": "$.MountTargetsCheck",
+      "Next": "AreMountTargetsGone"
+    },
+    "AreMountTargetsGone": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.MountTargetsCheck.MountTargets[0]",
+          "IsPresent": false,
+          "Next": "DeleteFileSystem"
+        }
+      ],
+      "Default": "WaitMountTargetsDeleted"
+    },
+    "DeleteFileSystem": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:deleteFileSystem",
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "Parameters": {
+        "FileSystemId.$": "$.FileSystemId"
+      },
+      "ResultPath": null,
+      "Next": "PrepareOutput",
+      "Retry": [
+        {
+          "ErrorEquals": ["Efs.FileSystemInUseException"],
+          "BackoffRate": 2,
+          "IntervalSeconds": 10,
+          "MaxAttempts": 3
+        }
+      ],
+      "Catch": [{ "ErrorEquals": ["States.ALL"], "Next": "DeletionFailed" }]
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "delete_filesystem",
+        "PrimaryIdentifier.$": "$.FileSystemId"
+      },
+      "Next": "DeletionSucceeded"
+    },
+    "SafetyCheckFailed": {
+      "Type": "Fail",
+      "Error": "SafetyCheckFailed",
+      "Cause": "The EFS file system does not have the 'refresh: true' tag."
+    },
+    "DeletionFailed": {
+      "Type": "Fail"
+    },
+    "DeletionSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}
