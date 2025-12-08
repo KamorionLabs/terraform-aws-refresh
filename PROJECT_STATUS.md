@@ -4,39 +4,56 @@
 > Mis à jour automatiquement lors des sessions de développement.
 
 ## Dernière mise à jour
-- **Date:** 2025-12-08
-- **Session:** Complétion de tous les modules Step Functions
+- **Date:** 2025-12-09
+- **Version:** v0.2.0
+- **Session:** Modules cross-account et documentation
 
 ---
 
 ## Vue d'ensemble
 
-Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS entre comptes AWS (source production → destination non-prod) via AWS Step Functions.
+Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS et EFS entre comptes AWS (source production → destination non-prod) via AWS Step Functions.
 
 ### Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  Shared Services Account (Orchestrator)                     │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │  Step Functions (17 DB + EFS + EKS + Utils)           │  │
-│  │  IAM Role: refresh-orchestrator-role                  │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                            │                                │
-│         AssumeRole ────────┼────────── AssumeRole           │
-│                            │                                │
-└────────────────────────────┼────────────────────────────────┘
-                             │
-        ┌────────────────────┼────────────────────┐
-        │                    │                    │
-        ▼                    ▼                    ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ Prod Account │    │ Staging Acct │    │ Preprod Acct │
-│              │    │              │    │              │
-│ SOURCE       │    │ DESTINATION  │    │ DESTINATION  │
-│ (Read-Only)  │    │ (Full Access)│    │ (Full Access)│
-└──────────────┘    └──────────────┘    └──────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Shared Services Account                              │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │                    Orchestrator Step Function                        │    │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │    │
+│  │  │    DB    │  │   EFS    │  │   EKS    │  │  Utils   │            │    │
+│  │  │ 17 SFN   │  │  6 SFN   │  │  2 SFN   │  │  5 SFN   │            │    │
+│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘            │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                    │                                         │
+│                          AssumeRole (cross-account)                          │
+└────────────────────────────────────┼────────────────────────────────────────┘
+                                     │
+          ┌──────────────────────────┼──────────────────────────┐
+          │                          │                          │
+          ▼                          ▼                          ▼
+┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐
+│   Source Account    │  │ Destination Account │  │ Destination Account │
+│   (Production)      │  │   (Staging)         │  │   (Dev)             │
+│                     │  │                     │  │                     │
+│  source-account     │  │ destination-account │  │ destination-account │
+│  module             │  │ module + Lambdas    │  │ module + Lambdas    │
+└─────────────────────┘  └─────────────────────┘  └─────────────────────┘
 ```
+
+### Modèle de déploiement
+
+| Account | Module | Terraform State |
+|---------|--------|-----------------|
+| Shared Services | Root module | `shared-services/` |
+| Production | `modules/source-account` | `production/` |
+| Staging | `modules/destination-account` | `staging/` |
+| Dev | `modules/destination-account` | `dev/` |
+
+**Ordre de déploiement:**
+1. Source + Destination accounts (en parallèle)
+2. Shared Services (avec les ARNs des rôles créés)
 
 ---
 
@@ -95,11 +112,28 @@ Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS entr
 |--------------|-------------|--------|
 | `refresh_orchestrator` | Orchestrateur principal 3 phases | ✅ |
 
-#### Infrastructure Terraform
-- [x] Structure du module Terraform
-- [x] Module IAM (orchestrator role)
-- [x] Module Step Functions DB
+#### Modules Terraform Cross-Account - 100%
+| Module | Description | Status |
+|--------|-------------|--------|
+| `modules/source-account` | Rôle IAM pour compte production | ✅ |
+| `modules/destination-account` | Rôle IAM + Lambdas pour comptes non-prod | ✅ |
+| `modules/iam` | Rôle orchestrateur (shared services) | ✅ |
+
+#### Lambda Helpers - 100%
+| Lambda | Description | Status |
+|--------|-------------|--------|
+| `run-sql` | Exécution SQL sur Aurora MySQL | ✅ |
+| `get-efs-subpath` | Recherche répertoire backup dans EFS | ✅ |
+| `pymysql` layer | Layer Python pour PyMySQL | ✅ |
+
+#### Infrastructure Terraform - 100%
+- [x] Structure du module Terraform Registry compliant
+- [x] Module IAM (orchestrator role avec ARNs en input)
+- [x] Module Step Functions (DB, EFS, EKS, Utils, Orchestrator)
+- [x] Module source-account (rôle + policies)
+- [x] Module destination-account (rôle + policies + lambdas + EKS access entry)
 - [x] Variables et outputs
+- [x] README complet avec exemples
 
 #### Tests CI/CD
 - [x] Script de validation ASL (Python)
@@ -107,20 +141,12 @@ Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS entr
 - [x] Tests Step Functions Local (Docker)
 - [x] GitHub Actions workflow
 
-#### Terraform Modules - 100%
-- [x] Module Terraform pour DB Step Functions
-- [x] Module Terraform pour EFS Step Functions
-- [x] Module Terraform pour EKS Step Functions
-- [x] Module Terraform pour Utils Step Functions
-- [x] Module Terraform pour Orchestrator
-- [x] Main module avec tous les sous-modules
-- [x] Variables et outputs consolidés
-
 ### ❌ À faire
 
 #### Tests
-- [ ] Tests unitaires Terraform
-- [ ] Tests d'intégration complète
+- [ ] Tests unitaires Terraform (terraform validate)
+- [ ] Tests d'intégration end-to-end
+- [ ] Exemple de déploiement complet multi-compte
 
 ---
 
@@ -129,28 +155,51 @@ Module Terraform pour orchestrer le refresh de bases de données Aurora/RDS entr
 ```
 terraform-aws-refresh/
 ├── main.tf                    # Module principal
-├── variables.tf               # Variables d'entrée
+├── variables.tf               # Variables d'entrée (source/dest role ARNs)
 ├── outputs.tf                 # Sorties du module
 ├── versions.tf                # Versions Terraform/providers
+├── README.md                  # Documentation complète
 ├── PROJECT_STATUS.md          # Ce fichier (suivi projet)
 │
 ├── modules/
 │   ├── step-functions/
 │   │   ├── db/                # ✅ 17 Step Functions DB
-│   │   │   └── *.asl.json     # Définitions ASL
+│   │   │   └── *.asl.json
 │   │   ├── efs/               # ✅ 6 Step Functions EFS
-│   │   │   └── *.asl.json     # Définitions ASL
+│   │   │   └── *.asl.json
 │   │   ├── eks/               # ✅ 2 Step Functions EKS
-│   │   │   └── *.asl.json     # Définitions ASL
+│   │   │   └── *.asl.json
 │   │   ├── utils/             # ✅ 5 Step Functions Utils
-│   │   │   └── *.asl.json     # Définitions ASL
+│   │   │   └── *.asl.json
 │   │   └── orchestrator/      # ✅ 1 Orchestrateur principal
-│   │       └── *.asl.json     # Définitions ASL
+│   │       └── *.asl.json
 │   │
-│   └── iam/                   # ✅ Rôles IAM cross-account
-│       ├── main.tf
+│   ├── iam/                   # ✅ Rôle orchestrateur
+│   │   ├── main.tf
+│   │   ├── variables.tf
+│   │   └── outputs.tf
+│   │
+│   ├── source-account/        # ✅ Module compte source (production)
+│   │   ├── main.tf            # IAM role + policies
+│   │   ├── variables.tf
+│   │   ├── outputs.tf
+│   │   └── versions.tf
+│   │
+│   └── destination-account/   # ✅ Module compte destination (non-prod)
+│       ├── main.tf            # IAM role + policies + EKS access entry
+│       ├── lambdas.tf         # Lambda functions (run-sql, get-efs-subpath)
 │       ├── variables.tf
-│       └── outputs.tf
+│       ├── outputs.tf
+│       └── versions.tf
+│
+├── lambdas/
+│   ├── run-scripts-mysql/
+│   │   └── run_sql.py         # ✅ Lambda exécution SQL
+│   ├── get-efs-subpath/
+│   │   └── get_efs_subpath.py # ✅ Lambda recherche backup EFS
+│   └── layers/
+│       └── pymysql/
+│           └── requirements.txt # ✅ PyMySQL layer
 │
 ├── scripts/
 │   └── validate_asl.py        # ✅ Validateur ASL Python
@@ -175,79 +224,117 @@ terraform-aws-refresh/
 
 ## Comment utiliser ce module
 
-### Exemple minimal
+### Déploiement en 3 étapes
+
+#### Étape 1: Compte Source (Production)
 
 ```hcl
-module "refresh" {
-  source = "git::https://github.com/ORG/terraform-aws-refresh.git"
+# deployments/production/main.tf
+module "refresh_source" {
+  source  = "KamorionLabs/refresh/aws//modules/source-account"
+  version = "0.2.0"
 
-  prefix      = "myapp"
-  environment = "shared"
+  prefix                = "myapp-refresh"
+  orchestrator_role_arn = "arn:aws:iam::000000000000:role/myapp-refresh-orchestrator"
 
-  source_account_id       = "111111111111"  # Compte prod
-  destination_account_ids = [
-    "222222222222",  # Staging
-    "333333333333"   # Preprod
-  ]
+  tags = { Project = "database-refresh" }
+}
 
-  tags = {
-    Project = "database-refresh"
-  }
+output "role_arn" {
+  value = module.refresh_source.role_arn
 }
 ```
 
-### Déploiement des rôles dans les comptes
+#### Étape 2: Comptes Destination (Staging, Dev...)
 
-```bash
-# 1. Déployer dans le compte orchestrateur (shared services)
-terraform apply
+```hcl
+# deployments/staging/main.tf
+module "refresh_destination" {
+  source  = "KamorionLabs/refresh/aws//modules/destination-account"
+  version = "0.2.0"
 
-# 2. Récupérer les policies pour les autres comptes
-terraform output source_role_policy > source-role-policy.json
-terraform output destination_role_policy > destination-role-policy.json
+  prefix                = "myapp-refresh"
+  orchestrator_role_arn = "arn:aws:iam::000000000000:role/myapp-refresh-orchestrator"
 
-# 3. Créer les rôles dans source/destination accounts
-# (via Terraform séparé ou manuellement)
+  deploy_lambdas = true
+  vpc_id         = "vpc-xxx"
+  subnet_ids     = ["subnet-xxx", "subnet-yyy"]
+
+  # EKS Access Entry (optionnel)
+  create_eks_access_entry = true
+  eks_cluster_name        = "my-cluster"
+
+  tags = { Project = "database-refresh" }
+}
+
+output "role_arn" {
+  value = module.refresh_destination.role_arn
+}
+```
+
+#### Étape 3: Compte Shared Services (Orchestrateur)
+
+```hcl
+# deployments/shared-services/main.tf
+module "refresh" {
+  source  = "KamorionLabs/refresh/aws"
+  version = "0.2.0"
+
+  prefix = "myapp-refresh"
+
+  # ARNs des rôles créés aux étapes 1 et 2
+  source_role_arns = [
+    "arn:aws:iam::111111111111:role/myapp-refresh-source-role"
+  ]
+  destination_role_arns = [
+    "arn:aws:iam::222222222222:role/myapp-refresh-destination-role",
+    "arn:aws:iam::333333333333:role/myapp-refresh-destination-role"
+  ]
+
+  tags = { Project = "database-refresh" }
+}
 ```
 
 ---
 
 ## Sessions de développement
 
+### 2025-12-09 - Modules cross-account et documentation
+**Objectif:** Finaliser les modules pour déploiement multi-compte
+
+**Réalisé:**
+1. ✅ Module `source-account`
+   - IAM role avec policies RDS snapshot, KMS, EFS, Secrets Manager
+   - Support rôle existant (`create_role = false`)
+2. ✅ Module `destination-account`
+   - IAM role avec policies complètes (RDS, EFS, EKS, Lambda, S3, SSM, Backup)
+   - Lambda helpers (run-sql, get-efs-subpath) avec VPC config
+   - EKS Access Entry pour accès Kubernetes
+   - Support rôle existant
+3. ✅ Refactoring module IAM
+   - Variables `source_role_arns` / `destination_role_arns` (ARNs en input)
+   - Suppression génération automatique des ARNs
+4. ✅ Fixes ASL/Lambda
+   - Correction paramètres run_sql_lambda.asl.json
+   - Correction chemin get_subpath_and_store_in_ssm.asl.json (`.subpath` vs `[0]`)
+   - Ajout permission `backup:ListRecoveryPointsByResource`
+5. ✅ Documentation
+   - README complet avec workflow déploiement 3 étapes
+   - PROJECT_STATUS mis à jour
+
+**Version:** v0.2.0 (breaking change - role ARNs en input)
+
 ### 2025-12-08 - Complétion des Step Functions
 **Objectif:** Compléter tous les modules Step Functions ASL
 
 **Réalisé:**
 1. ✅ Module EFS complet (6 Step Functions)
-   - `create_filesystem` - Création EFS avec lifecycle et mount targets
-   - `get_subpath_and_store_in_ssm` - Récupération subpath via Lambda
-   - `restore_from_backup` - Restauration depuis AWS Backup
-   - `setup_cross_account_replication` - Configuration réplication cross-account
-   - `wait_replication_complete` - Attente synchronisation initiale
 2. ✅ Module EKS complet (2 Step Functions)
-   - `manage_storage` - Gestion StorageClass, PV, PVC
-   - `scale_nodegroup_asg` - Scaling ASG nodegroup
 3. ✅ Module Utils complet (5 Step Functions)
-   - `tag_resources` - Tagging avec merge source/config
-   - `run_archive_job` - Archivage MySQL/media vers S3
-   - `prepare_refresh` - Génération noms et récupération tags
-   - `cleanup_and_stop` - Cleanup parallèle clusters/EFS/nodegroup
-   - `notify` - Notifications DynamoDB + SNS
 4. ✅ Orchestrateur principal
-   - `refresh_orchestrator` - Workflow 3 phases (Data, Switch, Cleanup)
-5. ✅ Tests CI/CD
-   - Script validation ASL Python (`validate_asl.py`)
-   - Tests pytest pour validation structurelle
-   - Tests Step Functions Local (Docker)
-   - GitHub Actions workflow
+5. ✅ Tests CI/CD (validation ASL, pytest, GitHub Actions)
 
-**Stats:**
-- Total: 31 Step Functions ASL validées
-- 0 erreurs, 11 warnings (attendus)
-
-**Prochaines étapes:**
-1. Créer modules Terraform pour EFS/EKS/Utils/Orchestrator
-2. Tests d'intégration complets
+**Stats:** 31 Step Functions ASL validées
 
 ### 2025-12-08 - Initialisation
 **Objectif:** Créer le nouveau dépôt propre depuis le sandbox legacy
@@ -291,8 +378,18 @@ Chaque Step Function utilise `Credentials.RoleArn` pour les opérations cross-ac
 }
 ```
 
-### KMS pour snapshots chiffrés
-La Step Function `share_snapshot` crée automatiquement un KMS grant pour permettre au compte destination de déchiffrer les snapshots chiffrés.
+### Lambda Helpers
+| Lambda | Runtime | Layers | VPC |
+|--------|---------|--------|-----|
+| `run-sql` | Python 3.11 | pymysql | Oui |
+| `get-efs-subpath` | Python 3.11 | - | Oui (avec EFS mount) |
+
+### Permissions IAM par compte
+| Compte | Services | Niveau |
+|--------|----------|--------|
+| Source | RDS, KMS, EFS, Secrets, Tags | Read + Snapshot |
+| Destination | RDS, EFS, EKS, Lambda, S3, SSM, Secrets, Backup, Tags | Full |
+| Orchestrator | Step Functions, STS (AssumeRole) | Execute + Assume |
 
 ---
 
@@ -301,10 +398,21 @@ La Step Function `share_snapshot` crée automatiquement un KMS grant pour permet
 - [AWS Step Functions Credentials](https://docs.aws.amazon.com/step-functions/latest/dg/connect-to-resource.html#connect-credentials)
 - [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/)
 - [RDS Snapshot Sharing](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/USER_ShareSnapshot.html)
+- [EKS Access Entries](https://docs.aws.amazon.com/eks/latest/userguide/access-entries.html)
+
+---
+
+## Releases
+
+| Version | Date | Description |
+|---------|------|-------------|
+| v0.2.0 | 2025-12-09 | **Breaking:** Role ARNs en input, modules cross-account, lambdas |
+| v0.1.0 | - | (supprimée, remplacée par v0.2.0) |
 
 ---
 
 ## Contact
 
 **Projet:** terraform-aws-refresh
-**Maintainer:** Kamorion
+**Registry:** `KamorionLabs/refresh/aws`
+**Maintainer:** KamorionLabs
