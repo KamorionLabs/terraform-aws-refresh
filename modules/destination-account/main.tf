@@ -260,6 +260,16 @@ resource "aws_iam_role_policy" "lambda_access" {
         ] : [
           "arn:aws:s3:::${var.prefix}-lambda-code-*/*"
         ]
+      },
+      {
+        Sid    = "EC2DescribeForVpcLambda"
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeSecurityGroups",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVpcs"
+        ]
+        Resource = "*"
       }
     ]
   })
