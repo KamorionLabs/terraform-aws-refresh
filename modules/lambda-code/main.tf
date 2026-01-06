@@ -13,6 +13,12 @@ locals {
   # S3 bucket name - use custom name if provided, otherwise fallback to default
   bucket_name = var.bucket_name != null ? var.bucket_name : "${var.prefix}-lambda-code-${local.account_id}"
 
+  # Filter cross-account role ARNs - remove empty/null and validate IAM ARN format
+  valid_role_arns = [
+    for arn in var.cross_account_role_arns : arn
+    if arn != null && arn != "" && can(regex("^arn:aws:iam::[0-9]+:role/", arn))
+  ]
+
   # Lambda functions to package (EFS-related only, MySQL lambdas are deployed directly)
   lambda_functions = {
     "check-flag-file" = {
@@ -72,7 +78,7 @@ resource "aws_s3_bucket_public_access_block" "lambda_code" {
 # -----------------------------------------------------------------------------
 
 resource "aws_s3_bucket_policy" "lambda_code" {
-  count  = length(var.cross_account_role_arns) > 0 ? 1 : 0
+  count  = length(local.valid_role_arns) > 0 ? 1 : 0
   bucket = aws_s3_bucket.lambda_code.id
 
   policy = jsonencode({
@@ -82,7 +88,7 @@ resource "aws_s3_bucket_policy" "lambda_code" {
         Sid    = "AllowCrossAccountGetObject"
         Effect = "Allow"
         Principal = {
-          AWS = var.cross_account_role_arns
+          AWS = local.valid_role_arns
         }
         Action = [
           "s3:GetObject",
@@ -94,7 +100,7 @@ resource "aws_s3_bucket_policy" "lambda_code" {
         Sid    = "AllowCrossAccountListBucket"
         Effect = "Allow"
         Principal = {
-          AWS = var.cross_account_role_arns
+          AWS = local.valid_role_arns
         }
         Action   = "s3:ListBucket"
         Resource = aws_s3_bucket.lambda_code.arn
@@ -127,8 +133,4 @@ resource "aws_s3_object" "lambda_code" {
   key    = "lambdas/${each.key}.zip"
   source = each.value.output_path
   etag   = each.value.output_md5
-
-  tags = merge(var.tags, {
-    LambdaFunction = each.key
-  })
 }
