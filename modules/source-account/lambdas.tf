@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# Lambda Functions for Destination Account
+# Lambda Functions for Source Account
 # -----------------------------------------------------------------------------
 
 locals {
@@ -7,92 +7,17 @@ locals {
   python_version_long = "python${local.python_version}"
   lambdas_path        = "${path.module}/../../lambdas"
 
-  lambda_layers = var.deploy_lambdas ? ["pymysql"] : []
-
-  # Base lambda functions (always deployed if deploy_lambdas is true)
-  lambda_functions_base = var.deploy_lambdas ? {
-    "run-sql" = {
-      path             = "${local.lambdas_path}/run-scripts-mysql/run_sql.py"
-      handler          = "run_sql.lambda_handler"
-      timeout          = 900
-      memory_size      = 320
-      layers           = ["pymysql"]
-      description      = "Execute SQL scripts from S3 on MySQL/Aurora databases"
-      efs_access_point = false
-    }
-  } : {}
-
-  # EFS lambda functions (only deployed if enable_efs is true)
+  # EFS lambda functions (only deployed if enable_efs and deploy_lambdas are true)
   lambda_functions_efs = var.deploy_lambdas && var.enable_efs ? {
-    "get-efs-subpath" = {
-      path             = "${local.lambdas_path}/get-efs-subpath/get_efs_subpath.py"
-      handler          = "get_efs_subpath.lambda_handler"
-      timeout          = 60
-      memory_size      = 128
-      layers           = []
-      description      = "Find the restore backup directory in EFS"
-      efs_access_point = true
-    }
     "check-flag-file" = {
       path             = "${local.lambdas_path}/check-flag-file/check_flag_file.py"
       handler          = "check_flag_file.lambda_handler"
       timeout          = 60
       memory_size      = 128
-      layers           = []
-      description      = "Check replication flag file in EFS (write/check/delete)"
+      description      = "Manage replication flag file in EFS (write/check/delete)"
       efs_access_point = true
     }
   } : {}
-
-  # Merged lambda functions
-  lambda_functions_filtered = merge(local.lambda_functions_base, local.lambda_functions_efs)
-
-  lambda_functions_layers = {
-    for k, v in local.lambda_functions_filtered : k => [
-      for layer in v.layers : aws_lambda_layer_version.layer[layer].arn
-    ]
-  }
-}
-
-# -----------------------------------------------------------------------------
-# Lambda Layers - pip install
-# -----------------------------------------------------------------------------
-
-resource "null_resource" "pip_install" {
-  for_each = toset(local.lambda_layers)
-
-  triggers = {
-    requirements_hash = sha256(file("${local.lambdas_path}/layers/${each.key}/requirements.txt"))
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      python3 -m pip --isolated \
-        install -r ${local.lambdas_path}/layers/${each.key}/requirements.txt \
-        --platform manylinux2014_aarch64 \
-        --implementation cp \
-        --python-version ${local.python_version} \
-        --only-binary=:all: --upgrade \
-        -t ${local.lambdas_path}/layers/${each.key}/python
-    EOT
-  }
-}
-
-data "archive_file" "lambda_layers" {
-  for_each    = null_resource.pip_install
-  type        = "zip"
-  source_dir  = "${local.lambdas_path}/layers/${each.key}/"
-  output_path = "${local.lambdas_path}/layers/${each.key}.zip"
-}
-
-resource "aws_lambda_layer_version" "layer" {
-  for_each = data.archive_file.lambda_layers
-
-  layer_name               = "${var.prefix}-${each.key}"
-  filename                 = each.value.output_path
-  source_code_hash         = each.value.output_base64sha256
-  compatible_runtimes      = [local.python_version_long]
-  compatible_architectures = ["arm64"]
 }
 
 # -----------------------------------------------------------------------------
@@ -100,7 +25,7 @@ resource "aws_lambda_layer_version" "layer" {
 # -----------------------------------------------------------------------------
 
 data "archive_file" "lambda_functions" {
-  for_each = local.lambda_functions_filtered
+  for_each = local.lambda_functions_efs
 
   type             = "zip"
   source_file      = each.value.path
@@ -116,16 +41,15 @@ resource "aws_lambda_function" "functions" {
   for_each = data.archive_file.lambda_functions
 
   function_name    = "${var.prefix}-${each.key}"
-  description      = lookup(local.lambda_functions_filtered[each.key], "description", "")
+  description      = lookup(local.lambda_functions_efs[each.key], "description", "")
   role             = aws_iam_role.lambda[0].arn
   filename         = each.value.output_path
   source_code_hash = each.value.output_base64sha256
-  handler          = local.lambda_functions_filtered[each.key].handler
+  handler          = local.lambda_functions_efs[each.key].handler
   runtime          = local.python_version_long
   architectures    = ["arm64"]
-  layers           = lookup(local.lambda_functions_layers, each.key, [])
-  timeout          = lookup(local.lambda_functions_filtered[each.key], "timeout", 300)
-  memory_size      = lookup(local.lambda_functions_filtered[each.key], "memory_size", 320)
+  timeout          = lookup(local.lambda_functions_efs[each.key], "timeout", 300)
+  memory_size      = lookup(local.lambda_functions_efs[each.key], "memory_size", 128)
 
   vpc_config {
     security_group_ids = var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
@@ -133,7 +57,7 @@ resource "aws_lambda_function" "functions" {
   }
 
   dynamic "file_system_config" {
-    for_each = lookup(local.lambda_functions_filtered[each.key], "efs_access_point", false) && var.efs_access_point_arn != null ? [1] : []
+    for_each = lookup(local.lambda_functions_efs[each.key], "efs_access_point", false) && var.efs_access_point_arn != null ? [1] : []
     content {
       arn              = var.efs_access_point_arn
       local_mount_path = "/mnt/efs"
@@ -142,7 +66,8 @@ resource "aws_lambda_function" "functions" {
 
   environment {
     variables = {
-      LOG_LEVEL = var.lambda_log_level
+      LOG_LEVEL      = var.lambda_log_level
+      EFS_MOUNT_PATH = "/mnt/efs"
     }
   }
 
@@ -159,9 +84,9 @@ resource "aws_lambda_function" "functions" {
 # -----------------------------------------------------------------------------
 
 resource "aws_iam_role" "lambda" {
-  count = var.deploy_lambdas ? 1 : 0
+  count = var.deploy_lambdas && var.enable_efs ? 1 : 0
 
-  name = "${var.prefix}-lambda-role"
+  name = "${var.prefix}-source-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -180,9 +105,9 @@ resource "aws_iam_role" "lambda" {
 }
 
 resource "aws_iam_role_policy" "lambda" {
-  count = var.deploy_lambdas ? 1 : 0
+  count = var.deploy_lambdas && var.enable_efs ? 1 : 0
 
-  name = "${var.prefix}-lambda-policy"
+  name = "${var.prefix}-source-lambda-policy"
   role = aws_iam_role.lambda[0].id
 
   policy = jsonencode({
@@ -211,35 +136,11 @@ resource "aws_iam_role_policy" "lambda" {
         Resource = "*"
       },
       {
-        Sid    = "RDSDescribe"
-        Effect = "Allow"
-        Action = [
-          "rds:DescribeDBClusters",
-          "rds:DescribeDBInstances"
-        ]
-        Resource = "*"
-      },
-      {
-        Sid    = "SecretsManager"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = "arn:aws:secretsmanager:*:${local.account_id}:secret:*"
-      },
-      {
-        Sid    = "S3Access"
-        Effect = "Allow"
-        Action = [
-          "s3:GetObject"
-        ]
-        Resource = var.s3_bucket_arns
-      },
-      {
         Sid    = "EFSAccess"
         Effect = "Allow"
         Action = [
           "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite",
           "elasticfilesystem:ClientRead",
           "elasticfilesystem:DescribeFileSystems",
           "elasticfilesystem:DescribeAccessPoints",
@@ -256,10 +157,10 @@ resource "aws_iam_role_policy" "lambda" {
 # -----------------------------------------------------------------------------
 
 resource "aws_security_group" "lambda" {
-  count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
+  count = var.deploy_lambdas && var.enable_efs && var.create_lambda_security_group ? 1 : 0
 
-  name        = "${var.prefix}-lambda-sg"
-  description = "Security group for Lambda functions"
+  name        = "${var.prefix}-source-lambda-sg"
+  description = "Security group for Lambda functions in source account"
   vpc_id      = var.vpc_id
 
   lifecycle {
@@ -267,12 +168,12 @@ resource "aws_security_group" "lambda" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.prefix}-lambda-sg"
+    Name = "${var.prefix}-source-lambda-sg"
   })
 }
 
 resource "aws_security_group_rule" "lambda_https_egress" {
-  count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
+  count = var.deploy_lambdas && var.enable_efs && var.create_lambda_security_group ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -283,20 +184,8 @@ resource "aws_security_group_rule" "lambda_https_egress" {
   description       = "Allow HTTPS outbound for AWS APIs"
 }
 
-resource "aws_security_group_rule" "lambda_mysql_egress" {
-  count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
-
-  security_group_id = aws_security_group.lambda[0].id
-  type              = "egress"
-  protocol          = "tcp"
-  from_port         = 3306
-  to_port           = 3306
-  cidr_blocks       = var.database_cidr_blocks
-  description       = "Allow MySQL outbound to database"
-}
-
 resource "aws_security_group_rule" "lambda_nfs_egress" {
-  count = var.deploy_lambdas && var.create_lambda_security_group && var.enable_efs ? 1 : 0
+  count = var.deploy_lambdas && var.enable_efs && var.create_lambda_security_group ? 1 : 0
 
   security_group_id = aws_security_group.lambda[0].id
   type              = "egress"
@@ -312,7 +201,7 @@ resource "aws_security_group_rule" "lambda_nfs_egress" {
 # -----------------------------------------------------------------------------
 
 resource "aws_cloudwatch_log_group" "lambda" {
-  for_each = local.lambda_functions_filtered
+  for_each = local.lambda_functions_efs
 
   name              = "/aws/lambda/${var.prefix}-${each.key}"
   retention_in_days = var.log_retention_days

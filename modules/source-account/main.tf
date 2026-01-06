@@ -159,6 +159,16 @@ resource "aws_iam_role_policy" "efs_access" {
         Resource = "*"
       },
       {
+        Sid    = "EFSAccessPointManage"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:CreateAccessPoint",
+          "elasticfilesystem:DeleteAccessPoint",
+          "elasticfilesystem:TagResource"
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "CloudWatchMetrics"
         Effect = "Allow"
         Action = [
@@ -238,6 +248,63 @@ resource "aws_iam_role_policy" "tagging_access" {
           "tag:GetResources"
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
+# IAM Policy - Lambda Dynamic Creation (for EFS flag file check)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role_policy" "lambda_access" {
+  count = local.should_attach_policies && var.enable_efs ? 1 : 0
+
+  name = "${var.prefix}-lambda-access"
+  role = local.role_id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LambdaInvoke"
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = [
+          "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
+        ]
+      },
+      {
+        Sid    = "LambdaManage"
+        Effect = "Allow"
+        Action = [
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
+          "lambda:UpdateFunctionConfiguration",
+          "lambda:CreateFunction",
+          "lambda:DeleteFunction",
+          "lambda:TagResource"
+        ]
+        Resource = [
+          "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
+        ]
+      },
+      {
+        Sid    = "LambdaPassRole"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          "arn:aws:iam::${local.account_id}:role/${var.prefix}-*"
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
       }
     ]
   })

@@ -222,12 +222,31 @@ resource "aws_iam_role_policy" "lambda_access" {
         Sid    = "LambdaManage"
         Effect = "Allow"
         Action = [
+          "lambda:GetFunction",
+          "lambda:GetFunctionConfiguration",
           "lambda:UpdateFunctionConfiguration",
-          "lambda:GetFunctionConfiguration"
+          "lambda:CreateFunction",
+          "lambda:DeleteFunction",
+          "lambda:TagResource"
         ]
         Resource = [
           "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
         ]
+      },
+      {
+        Sid    = "LambdaPassRole"
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          "arn:aws:iam::${local.account_id}:role/${var.prefix}-*"
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "lambda.amazonaws.com"
+          }
+        }
       }
     ]
   })

@@ -1,0 +1,270 @@
+{
+  "Comment": "Cleanup EFS Lambdas created by Step Functions. Use to remove Lambdas that are no longer needed for specific contexts.",
+  "StartAt": "InitializeCleanup",
+  "States": {
+    "InitializeCleanup": {
+      "Type": "Pass",
+      "Comment": "Initialize cleanup state",
+      "Parameters": {
+        "Prefix.$": "$.Prefix",
+        "Contexts.$": "$.Contexts",
+        "Account.$": "$.Account",
+        "CleanupCheckFlagFile.$": "States.ArrayGetItem(States.Array($.CleanupCheckFlagFile, true), 0)",
+        "CleanupGetSubpath.$": "States.ArrayGetItem(States.Array($.CleanupGetSubpath, true), 0)",
+        "CleanupSourceLambdas.$": "States.ArrayGetItem(States.Array($.CleanupSourceLambdas, false), 0)",
+        "SourceAccount.$": "$.SourceAccount",
+        "Results": []
+      },
+      "Next": "ProcessContexts"
+    },
+    "ProcessContexts": {
+      "Type": "Map",
+      "Comment": "Process each context to cleanup associated Lambdas",
+      "ItemsPath": "$.Contexts",
+      "ItemSelector": {
+        "Context.$": "$$.Map.Item.Value",
+        "Prefix.$": "$.Prefix",
+        "Account.$": "$.Account",
+        "CleanupCheckFlagFile.$": "$.CleanupCheckFlagFile",
+        "CleanupGetSubpath.$": "$.CleanupGetSubpath",
+        "CleanupSourceLambdas.$": "$.CleanupSourceLambdas",
+        "SourceAccount.$": "$.SourceAccount"
+      },
+      "MaxConcurrency": 5,
+      "Iterator": {
+        "StartAt": "BuildLambdaNames",
+        "States": {
+          "BuildLambdaNames": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "Prefix.$": "$.Prefix",
+              "Account.$": "$.Account",
+              "CleanupCheckFlagFile.$": "$.CleanupCheckFlagFile",
+              "CleanupGetSubpath.$": "$.CleanupGetSubpath",
+              "CleanupSourceLambdas.$": "$.CleanupSourceLambdas",
+              "SourceAccount.$": "$.SourceAccount",
+              "CheckFlagFileLambdaName.$": "States.Format('{}-check-flag-file-{}', $.Prefix, $.Context)",
+              "GetSubpathLambdaName.$": "States.Format('{}-get-efs-subpath-{}', $.Prefix, $.Context)",
+              "DeletedLambdas": [],
+              "FailedLambdas": []
+            },
+            "Next": "ShouldCleanupCheckFlagFile"
+          },
+          "ShouldCleanupCheckFlagFile": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.CleanupCheckFlagFile",
+                "BooleanEquals": true,
+                "Next": "DeleteCheckFlagFileLambda"
+              }
+            ],
+            "Default": "ShouldCleanupGetSubpath"
+          },
+          "DeleteCheckFlagFileLambda": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:lambda:deleteFunction",
+            "Parameters": {
+              "FunctionName.$": "$.CheckFlagFileLambdaName"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.Account.RoleArn"
+            },
+            "ResultPath": null,
+            "Next": "RecordCheckFlagFileDeleted",
+            "Catch": [
+              {
+                "ErrorEquals": ["Lambda.ResourceNotFoundException"],
+                "ResultPath": "$.CheckFlagFileNotFound",
+                "Comment": "Lambda doesn't exist, continue",
+                "Next": "ShouldCleanupSourceCheckFlagFile"
+              },
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.CheckFlagFileDeleteError",
+                "Next": "RecordCheckFlagFileFailed"
+              }
+            ]
+          },
+          "RecordCheckFlagFileDeleted": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "Prefix.$": "$.Prefix",
+              "Account.$": "$.Account",
+              "CleanupCheckFlagFile.$": "$.CleanupCheckFlagFile",
+              "CleanupGetSubpath.$": "$.CleanupGetSubpath",
+              "CleanupSourceLambdas.$": "$.CleanupSourceLambdas",
+              "SourceAccount.$": "$.SourceAccount",
+              "CheckFlagFileLambdaName.$": "$.CheckFlagFileLambdaName",
+              "GetSubpathLambdaName.$": "$.GetSubpathLambdaName",
+              "DeletedLambdas.$": "States.Array($.CheckFlagFileLambdaName)",
+              "FailedLambdas.$": "$.FailedLambdas"
+            },
+            "Next": "ShouldCleanupSourceCheckFlagFile"
+          },
+          "RecordCheckFlagFileFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "Prefix.$": "$.Prefix",
+              "Account.$": "$.Account",
+              "CleanupCheckFlagFile.$": "$.CleanupCheckFlagFile",
+              "CleanupGetSubpath.$": "$.CleanupGetSubpath",
+              "CleanupSourceLambdas.$": "$.CleanupSourceLambdas",
+              "SourceAccount.$": "$.SourceAccount",
+              "CheckFlagFileLambdaName.$": "$.CheckFlagFileLambdaName",
+              "GetSubpathLambdaName.$": "$.GetSubpathLambdaName",
+              "DeletedLambdas.$": "$.DeletedLambdas",
+              "FailedLambdas.$": "States.Array($.CheckFlagFileLambdaName)"
+            },
+            "Next": "ShouldCleanupSourceCheckFlagFile"
+          },
+          "ShouldCleanupSourceCheckFlagFile": {
+            "Type": "Choice",
+            "Comment": "Check if we should also cleanup source account Lambda",
+            "Choices": [
+              {
+                "And": [
+                  {
+                    "Variable": "$.CleanupSourceLambdas",
+                    "BooleanEquals": true
+                  },
+                  {
+                    "Variable": "$.SourceAccount.RoleArn",
+                    "IsPresent": true
+                  }
+                ],
+                "Next": "DeleteSourceCheckFlagFileLambda"
+              }
+            ],
+            "Default": "ShouldCleanupGetSubpath"
+          },
+          "DeleteSourceCheckFlagFileLambda": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:lambda:deleteFunction",
+            "Parameters": {
+              "FunctionName.$": "$.CheckFlagFileLambdaName"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.SourceAccount.RoleArn"
+            },
+            "ResultPath": null,
+            "Next": "RecordSourceCheckFlagFileDeleted",
+            "Catch": [
+              {
+                "ErrorEquals": ["Lambda.ResourceNotFoundException"],
+                "ResultPath": "$.SourceCheckFlagFileNotFound",
+                "Comment": "Lambda doesn't exist in source, continue",
+                "Next": "ShouldCleanupGetSubpath"
+              },
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.SourceCheckFlagFileDeleteError",
+                "Next": "ShouldCleanupGetSubpath"
+              }
+            ]
+          },
+          "RecordSourceCheckFlagFileDeleted": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "Prefix.$": "$.Prefix",
+              "Account.$": "$.Account",
+              "CleanupCheckFlagFile.$": "$.CleanupCheckFlagFile",
+              "CleanupGetSubpath.$": "$.CleanupGetSubpath",
+              "CleanupSourceLambdas.$": "$.CleanupSourceLambdas",
+              "SourceAccount.$": "$.SourceAccount",
+              "CheckFlagFileLambdaName.$": "$.CheckFlagFileLambdaName",
+              "GetSubpathLambdaName.$": "$.GetSubpathLambdaName",
+              "DeletedLambdas.$": "States.ArrayConcat($.DeletedLambdas, States.Array(States.Format('source:{}', $.CheckFlagFileLambdaName)))",
+              "FailedLambdas.$": "$.FailedLambdas"
+            },
+            "Next": "ShouldCleanupGetSubpath"
+          },
+          "ShouldCleanupGetSubpath": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Variable": "$.CleanupGetSubpath",
+                "BooleanEquals": true,
+                "Next": "DeleteGetSubpathLambda"
+              }
+            ],
+            "Default": "PrepareContextResult"
+          },
+          "DeleteGetSubpathLambda": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::aws-sdk:lambda:deleteFunction",
+            "Parameters": {
+              "FunctionName.$": "$.GetSubpathLambdaName"
+            },
+            "Credentials": {
+              "RoleArn.$": "$.Account.RoleArn"
+            },
+            "ResultPath": null,
+            "Next": "RecordGetSubpathDeleted",
+            "Catch": [
+              {
+                "ErrorEquals": ["Lambda.ResourceNotFoundException"],
+                "ResultPath": "$.GetSubpathNotFound",
+                "Comment": "Lambda doesn't exist, continue",
+                "Next": "PrepareContextResult"
+              },
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.GetSubpathDeleteError",
+                "Next": "RecordGetSubpathFailed"
+              }
+            ]
+          },
+          "RecordGetSubpathDeleted": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "DeletedLambdas.$": "States.ArrayConcat($.DeletedLambdas, States.Array($.GetSubpathLambdaName))",
+              "FailedLambdas.$": "$.FailedLambdas"
+            },
+            "Next": "PrepareContextResult"
+          },
+          "RecordGetSubpathFailed": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "DeletedLambdas.$": "$.DeletedLambdas",
+              "FailedLambdas.$": "States.ArrayConcat($.FailedLambdas, States.Array($.GetSubpathLambdaName))"
+            },
+            "Next": "PrepareContextResult"
+          },
+          "PrepareContextResult": {
+            "Type": "Pass",
+            "Parameters": {
+              "Context.$": "$.Context",
+              "DeletedLambdas.$": "$.DeletedLambdas",
+              "FailedLambdas.$": "$.FailedLambdas"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.ContextResults",
+      "Next": "PrepareOutput"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Completed",
+        "ModuleName": "cleanup_efs_lambdas",
+        "Prefix.$": "$.Prefix",
+        "ContextsProcessed.$": "States.ArrayLength($.Contexts)",
+        "Results.$": "$.ContextResults",
+        "Message": "EFS Lambda cleanup completed"
+      },
+      "Next": "CleanupSucceeded"
+    },
+    "CleanupSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}
