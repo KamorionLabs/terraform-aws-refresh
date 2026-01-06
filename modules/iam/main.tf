@@ -79,9 +79,14 @@ resource "aws_iam_role_policy" "orchestrator_step_functions" {
         Action = [
           "events:PutTargets",
           "events:PutRule",
-          "events:DescribeRule"
+          "events:DescribeRule",
+          "events:DeleteRule",
+          "events:RemoveTargets"
         ]
-        Resource = "arn:aws:events:${data.aws_region.current.id}:${local.orchestrator_account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
+        Resource = [
+          "arn:aws:events:${data.aws_region.current.id}:${local.orchestrator_account_id}:rule/StepFunctionsGetEventsFor*",
+          "arn:aws:events:${data.aws_region.current.id}:${local.orchestrator_account_id}:rule/StepFunctions*"
+        ]
       }
     ]
   })
