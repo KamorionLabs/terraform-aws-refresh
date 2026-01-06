@@ -19,6 +19,14 @@ locals {
     log_group      = coalesce(var.resource_prefixes.log_group, var.prefix)
   }
 
+  # Dynamic lambda prefix for Step Function created Lambdas
+  # If dynamic_lambda_prefix is set and different from prefixes.lambda, include both patterns
+  dynamic_lambda_prefix = coalesce(var.dynamic_lambda_prefix, var.prefix)
+  lambda_resource_arns = distinct(concat(
+    ["arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"],
+    local.dynamic_lambda_prefix != local.prefixes.lambda ? ["arn:aws:lambda:*:${local.account_id}:function:${local.dynamic_lambda_prefix}-*"] : []
+  ))
+
   # Use existing role or created role
   role_arn  = var.create_role ? aws_iam_role.destination[0].arn : var.existing_role_arn
   role_name = var.create_role ? aws_iam_role.destination[0].name : var.existing_role_name
@@ -223,9 +231,7 @@ resource "aws_iam_role_policy" "lambda_access" {
         Action = [
           "lambda:InvokeFunction"
         ]
-        Resource = [
-          "arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"
-        ]
+        Resource = local.lambda_resource_arns
       },
       {
         Sid    = "LambdaManage"
@@ -238,9 +244,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "lambda:DeleteFunction",
           "lambda:TagResource"
         ]
-        Resource = [
-          "arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"
-        ]
+        Resource = local.lambda_resource_arns
       },
       {
         Sid    = "LambdaPassRole"

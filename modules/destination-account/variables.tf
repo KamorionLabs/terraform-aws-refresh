@@ -256,3 +256,14 @@ variable "lambda_code_bucket_arn" {
   type        = string
   default     = null
 }
+
+# -----------------------------------------------------------------------------
+# Dynamic Lambda Configuration
+# For Lambdas created dynamically by Step Functions (may use different prefixes)
+# -----------------------------------------------------------------------------
+
+variable "dynamic_lambda_prefix" {
+  description = "Prefix for dynamic Lambdas created by Step Functions (defaults to var.prefix). Used in IAM policies alongside resource_prefixes.lambda."
+  type        = string
+  default     = null
+}
