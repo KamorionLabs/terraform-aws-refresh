@@ -121,6 +121,15 @@ resource "aws_iam_role_policy" "efs_access" {
         Resource = "*"
       },
       {
+        Sid    = "CloudWatchMetrics"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:GetMetricData"
+        ]
+        Resource = "*"
+      },
+      {
         Sid    = "BackupAccess"
         Effect = "Allow"
         Action = [

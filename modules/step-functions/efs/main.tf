@@ -15,7 +15,7 @@ locals {
     # Backup & Replication
     restore_from_backup             = "restore_from_backup.asl.json"
     setup_cross_account_replication = "setup_cross_account_replication.asl.json"
-    wait_replication_complete       = "wait_replication_complete.asl.json"
+    check_replication_sync          = "check_replication_sync.asl.json"
   }
 }
 

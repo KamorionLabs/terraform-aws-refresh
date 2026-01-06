@@ -1,0 +1,497 @@
+{
+  "Comment": "Monitors EFS cross-account replication sync status. Use cases: (1) One-shot migration - wait until initial sync completes, (2) Ongoing monitoring - check current sync status with optional flag file verification",
+  "StartAt": "InitializeState",
+  "States": {
+    "InitializeState": {
+      "Type": "Pass",
+      "Comment": "Initialize counters and set defaults. Mode: 'check' (one-shot status) or 'wait' (poll until sync)",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "WaitSeconds": 60,
+        "MaxWaitCount": 60,
+        "WaitCount": 0,
+        "Mode.$": "States.ArrayGetItem(States.Array($.Mode, 'check'), 0)",
+        "EnableFlagFileCheck.$": "States.ArrayGetItem(States.Array($.EnableFlagFileCheck, false), 0)",
+        "SourceLambdaArn.$": "States.ArrayGetItem(States.Array($.SourceLambdaArn, ''), 0)",
+        "DestinationLambdaArn.$": "States.ArrayGetItem(States.Array($.DestinationLambdaArn, ''), 0)"
+      },
+      "Next": "GetReplicationStatus"
+    },
+    "GetReplicationStatus": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:efs:describeReplicationConfigurations",
+      "Parameters": {
+        "FileSystemId.$": "$.SourceFileSystemId"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.ReplicationStatus",
+      "Next": "CheckReplicationState",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CheckFailed"
+        }
+      ]
+    },
+    "CheckReplicationState": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "ENABLED",
+          "Next": "CheckLastSyncTime"
+        },
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "ENABLING",
+          "Next": "HandleEnablingState"
+        },
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "ERROR",
+          "Next": "ReplicationError"
+        },
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "StringEquals": "DELETING",
+          "Next": "ReplicationError"
+        }
+      ],
+      "Default": "WaitForReplication"
+    },
+    "HandleEnablingState": {
+      "Type": "Choice",
+      "Comment": "In check mode report status, in wait mode keep waiting",
+      "Choices": [
+        {
+          "Variable": "$.Mode",
+          "StringEquals": "check",
+          "Next": "PrepareEnablingOutput"
+        }
+      ],
+      "Default": "WaitForReplication"
+    },
+    "PrepareEnablingOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Enabling",
+        "ModuleName": "check_replication_sync",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "ReplicationState.$": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+        "Message": "Replication is being enabled, initial sync not yet started"
+      },
+      "Next": "CheckSucceeded"
+    },
+    "CheckLastSyncTime": {
+      "Type": "Choice",
+      "Comment": "Check if initial sync has completed by verifying LastReplicatedTimestamp exists",
+      "Choices": [
+        {
+          "Variable": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp",
+          "IsPresent": true,
+          "Next": "GetCloudWatchMetrics"
+        }
+      ],
+      "Default": "HandleNoSyncYet"
+    },
+    "HandleNoSyncYet": {
+      "Type": "Choice",
+      "Comment": "In check mode report status, in wait mode keep waiting",
+      "Choices": [
+        {
+          "Variable": "$.Mode",
+          "StringEquals": "check",
+          "Next": "PrepareNoSyncOutput"
+        }
+      ],
+      "Default": "WaitForReplication"
+    },
+    "PrepareNoSyncOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Syncing",
+        "ModuleName": "check_replication_sync",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "ReplicationState.$": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+        "Message": "Initial sync in progress, no LastReplicatedTimestamp yet"
+      },
+      "Next": "CheckSucceeded"
+    },
+    "GetCloudWatchMetrics": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:cloudwatch:getMetricStatistics",
+      "Parameters": {
+        "Namespace": "AWS/EFS",
+        "MetricName": "TimeSinceLastSync",
+        "Dimensions": [
+          {
+            "Name": "FileSystemId",
+            "Value.$": "$.SourceFileSystemId"
+          }
+        ],
+        "StartTime.$": "$$.Execution.StartTime",
+        "EndTime.$": "$$.State.EnteredTime",
+        "Period": 60,
+        "Statistics": ["Average", "Maximum"]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": "$.CloudWatchMetrics",
+      "Next": "CheckFlagFileEnabled",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.MetricsError",
+          "Next": "CheckFlagFileEnabled"
+        }
+      ]
+    },
+    "CheckFlagFileEnabled": {
+      "Type": "Choice",
+      "Comment": "If flag file check enabled and Lambda ARNs provided, do verification",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.EnableFlagFileCheck",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.SourceLambdaArn",
+              "StringMatches": "arn:aws:lambda:*"
+            },
+            {
+              "Variable": "$.DestinationLambdaArn",
+              "StringMatches": "arn:aws:lambda:*"
+            }
+          ],
+          "Next": "GenerateFlagId"
+        }
+      ],
+      "Default": "PrepareOutput"
+    },
+    "GenerateFlagId": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "SourceLambdaArn.$": "$.SourceLambdaArn",
+        "DestinationLambdaArn.$": "$.DestinationLambdaArn",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "$.WaitCount",
+        "EnableFlagFileCheck.$": "$.EnableFlagFileCheck",
+        "Mode.$": "$.Mode",
+        "ReplicationStatus.$": "$.ReplicationStatus",
+        "CloudWatchMetrics.$": "$.CloudWatchMetrics",
+        "FlagId.$": "States.UUID()",
+        "FlagRetryCount": 0,
+        "MaxFlagRetries": 5
+      },
+      "Next": "WriteFlagFileSource"
+    },
+    "WriteFlagFileSource": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.SourceLambdaArn",
+        "Payload": {
+          "action": "write",
+          "flag_id.$": "$.FlagId"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "StatusCode.$": "$.Payload.statusCode",
+        "Body.$": "States.StringToJson($.Payload.body)"
+      },
+      "ResultPath": "$.WriteFlagResult",
+      "Next": "WaitForFlagPropagation",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FlagError",
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "WaitForFlagPropagation": {
+      "Type": "Wait",
+      "Seconds": 120,
+      "Next": "CheckFlagFileDestination"
+    },
+    "CheckFlagFileDestination": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.DestinationLambdaArn",
+        "Payload": {
+          "action": "check",
+          "flag_id.$": "$.FlagId",
+          "timeout_seconds": 600
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "StatusCode.$": "$.Payload.statusCode",
+        "Body.$": "States.StringToJson($.Payload.body)"
+      },
+      "ResultPath": "$.CheckFlagResult",
+      "Next": "EvaluateFlagSync",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.FlagError",
+          "Next": "CleanupSourceFlag"
+        }
+      ]
+    },
+    "EvaluateFlagSync": {
+      "Type": "Choice",
+      "Comment": "Check if flag file was replicated",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.CheckFlagResult.Body.exists",
+              "BooleanEquals": true
+            },
+            {
+              "Variable": "$.CheckFlagResult.Body.valid",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "CleanupFlagFiles"
+        },
+        {
+          "Variable": "$.FlagRetryCount",
+          "NumericLessThan": 5,
+          "Next": "IncrementFlagRetry"
+        }
+      ],
+      "Default": "FlagSyncTimeout"
+    },
+    "IncrementFlagRetry": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "SourceLambdaArn.$": "$.SourceLambdaArn",
+        "DestinationLambdaArn.$": "$.DestinationLambdaArn",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "$.WaitCount",
+        "EnableFlagFileCheck.$": "$.EnableFlagFileCheck",
+        "Mode.$": "$.Mode",
+        "ReplicationStatus.$": "$.ReplicationStatus",
+        "CloudWatchMetrics.$": "$.CloudWatchMetrics",
+        "FlagId.$": "$.FlagId",
+        "WriteFlagResult.$": "$.WriteFlagResult",
+        "FlagRetryCount.$": "States.MathAdd($.FlagRetryCount, 1)",
+        "MaxFlagRetries.$": "$.MaxFlagRetries"
+      },
+      "Next": "WaitBeforeFlagRetry"
+    },
+    "WaitBeforeFlagRetry": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "CheckFlagFileDestination"
+    },
+    "FlagSyncTimeout": {
+      "Type": "Pass",
+      "Parameters": {
+        "FlagSyncStatus": "Timeout",
+        "FlagId.$": "$.FlagId",
+        "FlagRetryCount.$": "$.FlagRetryCount",
+        "CheckResult.$": "$.CheckFlagResult.Body"
+      },
+      "ResultPath": "$.FlagSyncResult",
+      "Next": "CleanupSourceFlag"
+    },
+    "CleanupFlagFiles": {
+      "Type": "Parallel",
+      "Comment": "Clean up flag files from both source and destination",
+      "Branches": [
+        {
+          "StartAt": "DeleteSourceFlag",
+          "States": {
+            "DeleteSourceFlag": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName.$": "$.SourceLambdaArn",
+                "Payload": {
+                  "action": "delete",
+                  "flag_id.$": "$.FlagId"
+                }
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "End": true
+                }
+              ]
+            }
+          }
+        },
+        {
+          "StartAt": "DeleteDestinationFlag",
+          "States": {
+            "DeleteDestinationFlag": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName.$": "$.DestinationLambdaArn",
+                "Payload": {
+                  "action": "delete",
+                  "flag_id.$": "$.FlagId"
+                }
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "End": true
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "PrepareFlagVerifiedOutput"
+    },
+    "CleanupSourceFlag": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName.$": "$.SourceLambdaArn",
+        "Payload": {
+          "action": "delete",
+          "flag_id.$": "$.FlagId"
+        }
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "PrepareOutput",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "PrepareOutput"
+        }
+      ]
+    },
+    "PrepareFlagVerifiedOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Verified",
+        "ModuleName": "check_replication_sync",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.ReplicationStatus.Replications[0].Destinations[0].FileSystemId",
+        "LastReplicatedTimestamp.$": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp",
+        "FlagFileVerified": true,
+        "FlagId.$": "$.FlagId",
+        "Message": "Replication sync verified with flag file test"
+      },
+      "Next": "CheckSucceeded"
+    },
+    "WaitForReplication": {
+      "Type": "Wait",
+      "SecondsPath": "$.WaitSeconds",
+      "Next": "IncrementCounter"
+    },
+    "IncrementCounter": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "SourceLambdaArn.$": "$.SourceLambdaArn",
+        "DestinationLambdaArn.$": "$.DestinationLambdaArn",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "States.MathAdd($.WaitCount, 1)",
+        "EnableFlagFileCheck.$": "$.EnableFlagFileCheck",
+        "Mode.$": "$.Mode"
+      },
+      "Next": "CheckTimeout"
+    },
+    "CheckTimeout": {
+      "Type": "Choice",
+      "Comment": "Check if we've exceeded maximum wait iterations",
+      "Choices": [
+        {
+          "Variable": "$.WaitCount",
+          "NumericGreaterThanPath": "$.MaxWaitCount",
+          "Next": "TimeoutReached"
+        }
+      ],
+      "Default": "GetReplicationStatus"
+    },
+    "TimeoutReached": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Timeout",
+        "ModuleName": "check_replication_sync",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "WaitCount.$": "$.WaitCount",
+        "Message": "Timeout waiting for replication sync"
+      },
+      "Next": "CheckSucceeded"
+    },
+    "PrepareOutput": {
+      "Type": "Pass",
+      "Parameters": {
+        "Status": "Synced",
+        "ModuleName": "check_replication_sync",
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.ReplicationStatus.Replications[0].Destinations[0].FileSystemId",
+        "LastReplicatedTimestamp.$": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp",
+        "FlagFileVerified": false,
+        "Message": "Replication sync confirmed via API (no flag file test)"
+      },
+      "Next": "CheckSucceeded"
+    },
+    "ReplicationError": {
+      "Type": "Fail",
+      "Error": "ReplicationError",
+      "Cause": "EFS replication is in error or deleting state"
+    },
+    "CheckFailed": {
+      "Type": "Fail",
+      "Error": "CheckFailed",
+      "Cause": "Failed to check replication status"
+    },
+    "CheckSucceeded": {
+      "Type": "Succeed"
+    }
+  }
+}

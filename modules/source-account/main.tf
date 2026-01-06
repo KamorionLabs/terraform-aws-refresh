@@ -148,7 +148,17 @@ resource "aws_iam_role_policy" "efs_access" {
           "elasticfilesystem:DescribeFileSystems",
           "elasticfilesystem:DescribeMountTargets",
           "elasticfilesystem:DescribeAccessPoints",
-          "elasticfilesystem:DescribeBackupPolicy"
+          "elasticfilesystem:DescribeBackupPolicy",
+          "elasticfilesystem:DescribeReplicationConfigurations"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "CloudWatchMetrics"
+        Effect = "Allow"
+        Action = [
+          "cloudwatch:GetMetricStatistics",
+          "cloudwatch:GetMetricData"
         ]
         Resource = "*"
       },
