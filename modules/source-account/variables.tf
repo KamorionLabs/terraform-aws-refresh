@@ -3,9 +3,21 @@
 # -----------------------------------------------------------------------------
 
 variable "prefix" {
-  description = "Prefix for resource names"
+  description = "Default prefix for resource names. Can be overridden per resource type using resource_prefixes."
   type        = string
   default     = "refresh"
+}
+
+variable "resource_prefixes" {
+  description = "Custom prefixes per resource type. Falls back to var.prefix if not specified."
+  type = object({
+    iam_role       = optional(string)
+    iam_policy     = optional(string)
+    security_group = optional(string)
+    lambda         = optional(string)
+    log_group      = optional(string)
+  })
+  default = {}
 }
 
 variable "tags" {

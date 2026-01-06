@@ -38,7 +38,7 @@ output "lambda_security_group_id" {
 
 output "lambda_security_group_ids" {
   description = "Security group IDs for Lambda VPC configuration (created or provided)"
-  value = var.deploy_lambda_role && var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
+  value       = var.deploy_lambda_role && var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
 }
 
 output "lambda_subnet_ids" {

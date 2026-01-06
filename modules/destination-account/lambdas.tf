@@ -88,7 +88,7 @@ data "archive_file" "lambda_layers" {
 resource "aws_lambda_layer_version" "layer" {
   for_each = data.archive_file.lambda_layers
 
-  layer_name               = "${var.prefix}-${each.key}"
+  layer_name               = "${local.prefixes.lambda}-${each.key}"
   filename                 = each.value.output_path
   source_code_hash         = each.value.output_base64sha256
   compatible_runtimes      = [local.python_version_long]
@@ -115,7 +115,7 @@ data "archive_file" "lambda_functions" {
 resource "aws_lambda_function" "functions" {
   for_each = data.archive_file.lambda_functions
 
-  function_name    = "${var.prefix}-${each.key}"
+  function_name    = "${local.prefixes.lambda}-${each.key}"
   description      = lookup(local.lambda_functions_filtered[each.key], "description", "")
   role             = aws_iam_role.lambda[0].arn
   filename         = each.value.output_path
@@ -161,7 +161,7 @@ resource "aws_lambda_function" "functions" {
 resource "aws_iam_role" "lambda" {
   count = var.deploy_lambdas ? 1 : 0
 
-  name = "${var.prefix}-lambda-role"
+  name = "${local.prefixes.iam_role}-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -182,7 +182,7 @@ resource "aws_iam_role" "lambda" {
 resource "aws_iam_role_policy" "lambda" {
   count = var.deploy_lambdas ? 1 : 0
 
-  name = "${var.prefix}-lambda-policy"
+  name = "${local.prefixes.iam_policy}-lambda-policy"
   role = aws_iam_role.lambda[0].id
 
   policy = jsonencode({
@@ -196,7 +196,7 @@ resource "aws_iam_role_policy" "lambda" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${var.prefix}-*:*"
+        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.prefixes.log_group}-*:*"
       },
       {
         Sid    = "VPCAccess"
@@ -258,7 +258,7 @@ resource "aws_iam_role_policy" "lambda" {
 resource "aws_security_group" "lambda" {
   count = var.deploy_lambdas && var.create_lambda_security_group ? 1 : 0
 
-  name        = "${var.prefix}-lambda-sg"
+  name        = "${local.prefixes.security_group}-lambda-sg"
   description = "Security group for Lambda functions"
   vpc_id      = var.vpc_id
 
@@ -267,7 +267,7 @@ resource "aws_security_group" "lambda" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.prefix}-lambda-sg"
+    Name = "${local.prefixes.security_group}-lambda-sg"
   })
 }
 
@@ -314,7 +314,7 @@ resource "aws_security_group_rule" "lambda_nfs_egress" {
 resource "aws_cloudwatch_log_group" "lambda" {
   for_each = local.lambda_functions_filtered
 
-  name              = "/aws/lambda/${var.prefix}-${each.key}"
+  name              = "/aws/lambda/${local.prefixes.log_group}-${each.key}"
   retention_in_days = var.log_retention_days
 
   tags = var.tags

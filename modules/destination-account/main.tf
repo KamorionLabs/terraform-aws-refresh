@@ -10,6 +10,15 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.id
 
+  # Resource prefixes - fall back to var.prefix if not specified
+  prefixes = {
+    iam_role       = coalesce(var.resource_prefixes.iam_role, var.prefix)
+    iam_policy     = coalesce(var.resource_prefixes.iam_policy, var.prefix)
+    security_group = coalesce(var.resource_prefixes.security_group, var.prefix)
+    lambda         = coalesce(var.resource_prefixes.lambda, var.prefix)
+    log_group      = coalesce(var.resource_prefixes.log_group, var.prefix)
+  }
+
   # Use existing role or created role
   role_arn  = var.create_role ? aws_iam_role.destination[0].arn : var.existing_role_arn
   role_name = var.create_role ? aws_iam_role.destination[0].name : var.existing_role_name
@@ -27,7 +36,7 @@ locals {
 resource "aws_iam_role" "destination" {
   count = var.create_role ? 1 : 0
 
-  name = "${var.prefix}-destination-role"
+  name = "${local.prefixes.iam_role}-destination-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -61,7 +70,7 @@ resource "aws_iam_role" "destination" {
 resource "aws_iam_role_policy" "rds_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-rds-access"
+  name = "${local.prefixes.iam_policy}-rds-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -86,7 +95,7 @@ resource "aws_iam_role_policy" "rds_access" {
 resource "aws_iam_role_policy" "secrets_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-secrets-access"
+  name = "${local.prefixes.iam_policy}-secrets-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -111,7 +120,7 @@ resource "aws_iam_role_policy" "secrets_access" {
 resource "aws_iam_role_policy" "efs_access" {
   count = local.should_attach_policies && var.enable_efs ? 1 : 0
 
-  name = "${var.prefix}-efs-access"
+  name = "${local.prefixes.iam_policy}-efs-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -156,7 +165,7 @@ resource "aws_iam_role_policy" "efs_access" {
 resource "aws_iam_role_policy" "eks_access" {
   count = local.should_attach_policies && var.enable_eks ? 1 : 0
 
-  name = "${var.prefix}-eks-access"
+  name = "${local.prefixes.iam_policy}-eks-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -202,7 +211,7 @@ resource "aws_iam_role_policy" "eks_access" {
 resource "aws_iam_role_policy" "lambda_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-lambda-access"
+  name = "${local.prefixes.iam_policy}-lambda-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -215,7 +224,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "lambda:InvokeFunction"
         ]
         Resource = [
-          "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
+          "arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"
         ]
       },
       {
@@ -230,7 +239,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "lambda:TagResource"
         ]
         Resource = [
-          "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
+          "arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"
         ]
       },
       {
@@ -240,7 +249,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "iam:PassRole"
         ]
         Resource = [
-          "arn:aws:iam::${local.account_id}:role/${var.prefix}-*"
+          "arn:aws:iam::${local.account_id}:role/${local.prefixes.iam_role}-*"
         ]
         Condition = {
           StringEquals = {
@@ -257,8 +266,8 @@ resource "aws_iam_role_policy" "lambda_access" {
         ]
         Resource = var.lambda_code_bucket_arn != null ? [
           "${var.lambda_code_bucket_arn}/*"
-        ] : [
-          "arn:aws:s3:::${var.prefix}-lambda-code-*/*"
+          ] : [
+          "arn:aws:s3:::${local.prefixes.lambda}-lambda-code-*/*"
         ]
       },
       {
@@ -282,7 +291,7 @@ resource "aws_iam_role_policy" "lambda_access" {
 resource "aws_iam_role_policy" "ssm_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-ssm-access"
+  name = "${local.prefixes.iam_policy}-ssm-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -296,7 +305,7 @@ resource "aws_iam_role_policy" "ssm_access" {
           "ssm:PutParameter",
           "ssm:DeleteParameter"
         ]
-        Resource = "arn:aws:ssm:*:${local.account_id}:parameter/${var.prefix}/*"
+        Resource = "arn:aws:ssm:*:${local.account_id}:parameter/${local.prefixes.lambda}/*"
       }
     ]
   })
@@ -309,7 +318,7 @@ resource "aws_iam_role_policy" "ssm_access" {
 resource "aws_iam_role_policy" "s3_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-s3-access"
+  name = "${local.prefixes.iam_policy}-s3-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -336,7 +345,7 @@ resource "aws_iam_role_policy" "s3_access" {
 resource "aws_iam_role_policy" "kms_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-kms-access"
+  name = "${local.prefixes.iam_policy}-kms-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -365,7 +374,7 @@ resource "aws_iam_role_policy" "kms_access" {
 resource "aws_iam_role_policy" "tagging_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-tagging-access"
+  name = "${local.prefixes.iam_policy}-tagging-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -392,7 +401,7 @@ resource "aws_iam_role_policy" "tagging_access" {
 resource "aws_iam_role_policy" "dynamodb_access" {
   count = local.should_attach_policies && var.dynamodb_table_arn != null ? 1 : 0
 
-  name = "${var.prefix}-dynamodb-access"
+  name = "${local.prefixes.iam_policy}-dynamodb-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -419,7 +428,7 @@ resource "aws_iam_role_policy" "dynamodb_access" {
 resource "aws_iam_role_policy" "sns_access" {
   count = local.should_attach_policies && var.sns_topic_arn != null ? 1 : 0
 
-  name = "${var.prefix}-sns-access"
+  name = "${local.prefixes.iam_policy}-sns-access"
   role = local.role_id
 
   policy = jsonencode({

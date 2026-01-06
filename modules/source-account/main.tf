@@ -10,6 +10,15 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.id
 
+  # Resource prefixes - fall back to var.prefix if not specified
+  prefixes = {
+    iam_role       = coalesce(var.resource_prefixes.iam_role, var.prefix)
+    iam_policy     = coalesce(var.resource_prefixes.iam_policy, var.prefix)
+    security_group = coalesce(var.resource_prefixes.security_group, var.prefix)
+    lambda         = coalesce(var.resource_prefixes.lambda, var.prefix)
+    log_group      = coalesce(var.resource_prefixes.log_group, var.prefix)
+  }
+
   # Use existing role or created role
   role_arn  = var.create_role ? aws_iam_role.source[0].arn : var.existing_role_arn
   role_name = var.create_role ? aws_iam_role.source[0].name : var.existing_role_name
@@ -27,7 +36,7 @@ locals {
 resource "aws_iam_role" "source" {
   count = var.create_role ? 1 : 0
 
-  name = "${var.prefix}-source-role"
+  name = "${local.prefixes.iam_role}-source-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -61,7 +70,7 @@ resource "aws_iam_role" "source" {
 resource "aws_iam_role_policy" "rds_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-rds-access"
+  name = "${local.prefixes.iam_policy}-rds-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -110,7 +119,7 @@ resource "aws_iam_role_policy" "rds_access" {
 resource "aws_iam_role_policy" "kms_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-kms-access"
+  name = "${local.prefixes.iam_policy}-kms-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -140,7 +149,7 @@ resource "aws_iam_role_policy" "kms_access" {
 resource "aws_iam_role_policy" "efs_access" {
   count = local.should_attach_policies && var.enable_efs ? 1 : 0
 
-  name = "${var.prefix}-efs-access"
+  name = "${local.prefixes.iam_policy}-efs-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -209,7 +218,7 @@ resource "aws_iam_role_policy" "efs_access" {
 resource "aws_iam_role_policy" "secrets_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-secrets-access"
+  name = "${local.prefixes.iam_policy}-secrets-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -235,7 +244,7 @@ resource "aws_iam_role_policy" "secrets_access" {
 resource "aws_iam_role_policy" "tagging_access" {
   count = local.should_attach_policies ? 1 : 0
 
-  name = "${var.prefix}-tagging-access"
+  name = "${local.prefixes.iam_policy}-tagging-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -260,7 +269,7 @@ resource "aws_iam_role_policy" "tagging_access" {
 resource "aws_iam_role_policy" "lambda_access" {
   count = local.should_attach_policies && var.enable_efs ? 1 : 0
 
-  name = "${var.prefix}-lambda-access"
+  name = "${local.prefixes.iam_policy}-lambda-access"
   role = local.role_id
 
   policy = jsonencode({
@@ -273,7 +282,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "lambda:InvokeFunction"
         ]
         Resource = [
-          "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
+          "arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"
         ]
       },
       {
@@ -288,7 +297,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "lambda:TagResource"
         ]
         Resource = [
-          "arn:aws:lambda:*:${local.account_id}:function:${var.prefix}-*"
+          "arn:aws:lambda:*:${local.account_id}:function:${local.prefixes.lambda}-*"
         ]
       },
       {
@@ -298,7 +307,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "iam:PassRole"
         ]
         Resource = [
-          "arn:aws:iam::${local.account_id}:role/${var.prefix}-*"
+          "arn:aws:iam::${local.account_id}:role/${local.prefixes.iam_role}-*"
         ]
         Condition = {
           StringEquals = {
@@ -315,8 +324,8 @@ resource "aws_iam_role_policy" "lambda_access" {
         ]
         Resource = var.lambda_code_bucket_arn != null ? [
           "${var.lambda_code_bucket_arn}/*"
-        ] : [
-          "arn:aws:s3:::${var.prefix}-lambda-code-*/*"
+          ] : [
+          "arn:aws:s3:::${local.prefixes.lambda}-lambda-code-*/*"
         ]
       },
       {
@@ -340,7 +349,7 @@ resource "aws_iam_role_policy" "lambda_access" {
 resource "aws_iam_role" "lambda" {
   count = var.deploy_lambda_role ? 1 : 0
 
-  name = "${var.prefix}-lambda-role"
+  name = "${local.prefixes.iam_role}-lambda-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -361,7 +370,7 @@ resource "aws_iam_role" "lambda" {
 resource "aws_iam_role_policy" "lambda_execution" {
   count = var.deploy_lambda_role ? 1 : 0
 
-  name = "${var.prefix}-lambda-execution-policy"
+  name = "${local.prefixes.iam_policy}-lambda-execution-policy"
   role = aws_iam_role.lambda[0].id
 
   policy = jsonencode({
@@ -375,7 +384,7 @@ resource "aws_iam_role_policy" "lambda_execution" {
           "logs:CreateLogStream",
           "logs:PutLogEvents"
         ]
-        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${var.prefix}-*:*"
+        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.prefixes.log_group}-*:*"
       },
       {
         Sid    = "VPCAccess"
@@ -413,7 +422,7 @@ resource "aws_iam_role_policy" "lambda_execution" {
 resource "aws_security_group" "lambda" {
   count = var.deploy_lambda_role && var.create_lambda_security_group ? 1 : 0
 
-  name        = "${var.prefix}-lambda-sg"
+  name        = "${local.prefixes.security_group}-lambda-sg"
   description = "Security group for Lambda functions (flag file check)"
   vpc_id      = var.vpc_id
 
@@ -422,7 +431,7 @@ resource "aws_security_group" "lambda" {
   }
 
   tags = merge(var.tags, {
-    Name = "${var.prefix}-lambda-sg"
+    Name = "${local.prefixes.security_group}-lambda-sg"
   })
 }
 
