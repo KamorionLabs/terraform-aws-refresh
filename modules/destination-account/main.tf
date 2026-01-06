@@ -16,7 +16,8 @@ locals {
   role_id   = var.create_role ? aws_iam_role.destination[0].id : var.existing_role_name
 
   # Determine if we should attach policies
-  should_attach_policies = var.attach_policies && local.role_id != null
+  # Use variables known at plan time to avoid "count depends on resource attributes" error
+  should_attach_policies = var.attach_policies && (var.create_role || var.existing_role_name != null)
 }
 
 # -----------------------------------------------------------------------------
