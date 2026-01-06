@@ -6,7 +6,6 @@ locals {
   python_version      = "3.11"
   python_version_long = "python${local.python_version}"
   lambdas_path        = "${path.module}/../../lambdas"
-  lambdas_s3_path     = "lambdas/${local.region}/${var.prefix}"
 
   lambda_layers = var.deploy_lambdas ? ["pymysql"] : []
 
@@ -101,39 +100,17 @@ data "archive_file" "lambda_functions" {
 }
 
 # -----------------------------------------------------------------------------
-# Lambda Functions - S3 Storage
-# -----------------------------------------------------------------------------
-
-resource "aws_s3_object" "lambda_functions" {
-  for_each = data.archive_file.lambda_functions
-
-  bucket = var.s3_bucket_id
-  key    = "${local.lambdas_s3_path}/${each.key}.zip"
-  source = each.value.output_path
-  etag   = each.value.output_md5
-}
-
-resource "aws_s3_object" "lambda_functions_hash" {
-  for_each = data.archive_file.lambda_functions
-
-  bucket  = var.s3_bucket_id
-  key     = "${local.lambdas_s3_path}/${each.key}.zip.base64sha256"
-  content = each.value.output_base64sha256
-}
-
-# -----------------------------------------------------------------------------
-# Lambda Functions - Deployment
+# Lambda Functions - Deployment (direct upload, no S3)
 # -----------------------------------------------------------------------------
 
 resource "aws_lambda_function" "functions" {
-  for_each = aws_s3_object.lambda_functions
+  for_each = data.archive_file.lambda_functions
 
   function_name    = "${var.prefix}-${each.key}"
   description      = lookup(local.lambda_functions_filtered[each.key], "description", "")
   role             = aws_iam_role.lambda[0].arn
-  s3_bucket        = each.value.bucket
-  s3_key           = each.value.key
-  source_code_hash = aws_s3_object.lambda_functions_hash[each.key].content
+  filename         = each.value.output_path
+  source_code_hash = each.value.output_base64sha256
   handler          = local.lambda_functions_filtered[each.key].handler
   runtime          = local.python_version_long
   architectures    = ["arm64"]

@@ -203,12 +203,6 @@ variable "efs_access_point_arn" {
 # Lambda Deployment Configuration
 # -----------------------------------------------------------------------------
 
-variable "s3_bucket_id" {
-  description = "S3 bucket ID for storing Lambda deployment packages"
-  type        = string
-  default     = null
-}
-
 variable "vpc_id" {
   description = "VPC ID for Lambda security group"
   type        = string
