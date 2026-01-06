@@ -5,6 +5,20 @@
 # operations across multiple AWS accounts (source production -> destination non-prod)
 
 # -----------------------------------------------------------------------------
+# Lambda Code Module - Packages and uploads Lambda code to S3
+# -----------------------------------------------------------------------------
+module "lambda_code" {
+  count  = var.deploy_lambda_code ? 1 : 0
+  source = "./modules/lambda-code"
+
+  prefix = var.prefix
+  tags   = var.tags
+
+  # Cross-account access for Step Functions to deploy Lambdas dynamically
+  cross_account_role_arns = concat(var.source_role_arns, var.destination_role_arns)
+}
+
+# -----------------------------------------------------------------------------
 # Step Functions - Database Module
 # -----------------------------------------------------------------------------
 module "step_functions_db" {

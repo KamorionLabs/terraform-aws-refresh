@@ -29,6 +29,16 @@ variable "destination_role_arns" {
 }
 
 # -----------------------------------------------------------------------------
+# Lambda Code Configuration
+# -----------------------------------------------------------------------------
+
+variable "deploy_lambda_code" {
+  description = "Deploy Lambda code to S3 for dynamic creation by Step Functions"
+  type        = bool
+  default     = true
+}
+
+# -----------------------------------------------------------------------------
 # Step Functions Configuration
 # -----------------------------------------------------------------------------
 

@@ -73,3 +73,9 @@ variable "kms_key_arns" {
   type        = list(string)
   default     = ["*"]
 }
+
+variable "lambda_code_bucket_arn" {
+  description = "ARN of S3 bucket containing Lambda code (for dynamic Lambda creation by Step Functions)"
+  type        = string
+  default     = null
+}

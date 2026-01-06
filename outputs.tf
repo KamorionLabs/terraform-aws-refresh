@@ -76,3 +76,25 @@ output "all_step_function_arns" {
     orchestrator = module.orchestrator.step_function_arns
   }
 }
+
+# -----------------------------------------------------------------------------
+# Lambda Code Outputs
+# -----------------------------------------------------------------------------
+
+output "lambda_code_bucket_name" {
+  description = "Name of the S3 bucket containing Lambda code"
+  value       = var.deploy_lambda_code ? module.lambda_code[0].bucket_name : null
+}
+
+output "lambda_code_bucket_arn" {
+  description = "ARN of the S3 bucket containing Lambda code"
+  value       = var.deploy_lambda_code ? module.lambda_code[0].bucket_arn : null
+}
+
+output "lambda_config" {
+  description = "Lambda configuration for Step Functions input (S3 bucket and keys)"
+  value = var.deploy_lambda_code ? {
+    check_flag_file  = module.lambda_code[0].check_flag_file_config
+    get_efs_subpath  = module.lambda_code[0].get_efs_subpath_config
+  } : null
+}

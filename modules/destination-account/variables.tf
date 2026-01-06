@@ -226,3 +226,9 @@ variable "efs_cidr_blocks" {
   type        = list(string)
   default     = ["10.0.0.0/8"]
 }
+
+variable "lambda_code_bucket_arn" {
+  description = "ARN of S3 bucket containing Lambda code (for dynamic Lambda creation by Step Functions)"
+  type        = string
+  default     = null
+}

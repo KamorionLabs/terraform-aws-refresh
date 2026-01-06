@@ -305,6 +305,19 @@ resource "aws_iam_role_policy" "lambda_access" {
             "iam:PassedToService" = "lambda.amazonaws.com"
           }
         }
+      },
+      {
+        Sid    = "S3GetLambdaCode"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:GetObjectVersion"
+        ]
+        Resource = var.lambda_code_bucket_arn != null ? [
+          "${var.lambda_code_bucket_arn}/*"
+        ] : [
+          "arn:aws:s3:::${var.prefix}-lambda-code-*/*"
+        ]
       }
     ]
   })
