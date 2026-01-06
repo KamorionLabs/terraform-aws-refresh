@@ -32,18 +32,22 @@ resource "aws_iam_role" "destination" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          AWS = var.orchestrator_role_arn
-        }
-        Action = "sts:AssumeRole"
-        Condition = var.aws_organization_id != null ? {
-          StringEquals = {
-            "aws:PrincipalOrgID" = var.aws_organization_id
+      merge(
+        {
+          Effect = "Allow"
+          Principal = {
+            AWS = var.orchestrator_role_arn
           }
-        } : null
-      }
+          Action = "sts:AssumeRole"
+        },
+        var.aws_organization_id != null ? {
+          Condition = {
+            StringEquals = {
+              "aws:PrincipalOrgID" = var.aws_organization_id
+            }
+          }
+        } : {}
+      )
     ]
   })
 
