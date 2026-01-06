@@ -322,3 +322,120 @@ resource "aws_iam_role_policy" "lambda_access" {
     ]
   })
 }
+
+# -----------------------------------------------------------------------------
+# Lambda Execution Role (for dynamically created Lambdas)
+# -----------------------------------------------------------------------------
+
+resource "aws_iam_role" "lambda" {
+  count = var.deploy_lambda_role ? 1 : 0
+
+  name = "${var.prefix}-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = var.tags
+}
+
+resource "aws_iam_role_policy" "lambda_execution" {
+  count = var.deploy_lambda_role ? 1 : 0
+
+  name = "${var.prefix}-lambda-execution-policy"
+  role = aws_iam_role.lambda[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${var.prefix}-*:*"
+      },
+      {
+        Sid    = "VPCAccess"
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:DeleteNetworkInterface",
+          "ec2:AssignPrivateIpAddresses",
+          "ec2:UnassignPrivateIpAddresses"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "EFSAccess"
+        Effect = "Allow"
+        Action = [
+          "elasticfilesystem:ClientMount",
+          "elasticfilesystem:ClientWrite",
+          "elasticfilesystem:ClientRead",
+          "elasticfilesystem:DescribeFileSystems",
+          "elasticfilesystem:DescribeAccessPoints",
+          "elasticfilesystem:DescribeMountTargets"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# -----------------------------------------------------------------------------
+# Lambda Security Group
+# -----------------------------------------------------------------------------
+
+resource "aws_security_group" "lambda" {
+  count = var.deploy_lambda_role && var.create_lambda_security_group ? 1 : 0
+
+  name        = "${var.prefix}-lambda-sg"
+  description = "Security group for Lambda functions (flag file check)"
+  vpc_id      = var.vpc_id
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = merge(var.tags, {
+    Name = "${var.prefix}-lambda-sg"
+  })
+}
+
+resource "aws_security_group_rule" "lambda_https_egress" {
+  count = var.deploy_lambda_role && var.create_lambda_security_group ? 1 : 0
+
+  security_group_id = aws_security_group.lambda[0].id
+  type              = "egress"
+  protocol          = "tcp"
+  from_port         = 443
+  to_port           = 443
+  cidr_blocks       = ["0.0.0.0/0"]
+  description       = "Allow HTTPS outbound for AWS APIs"
+}
+
+resource "aws_security_group_rule" "lambda_nfs_egress" {
+  count = var.deploy_lambda_role && var.create_lambda_security_group && var.enable_efs ? 1 : 0
+
+  security_group_id = aws_security_group.lambda[0].id
+  type              = "egress"
+  protocol          = "tcp"
+  from_port         = 2049
+  to_port           = 2049
+  cidr_blocks       = var.efs_cidr_blocks
+  description       = "Allow NFS outbound to EFS"
+}
