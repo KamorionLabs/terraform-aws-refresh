@@ -38,6 +38,12 @@ variable "deploy_lambda_code" {
   default     = true
 }
 
+variable "lambda_code_bucket_name" {
+  description = "Custom S3 bucket name for Lambda code. If not provided, uses prefix-lambda-code-account_id"
+  type        = string
+  default     = null
+}
+
 # -----------------------------------------------------------------------------
 # Step Functions Configuration
 # -----------------------------------------------------------------------------

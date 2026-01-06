@@ -10,6 +10,9 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   region     = data.aws_region.current.id
 
+  # S3 bucket name - use custom name if provided, otherwise fallback to default
+  bucket_name = var.bucket_name != null ? var.bucket_name : "${var.prefix}-lambda-code-${local.account_id}"
+
   # Lambda functions to package (EFS-related only, MySQL lambdas are deployed directly)
   lambda_functions = {
     "check-flag-file" = {
@@ -30,10 +33,10 @@ locals {
 # -----------------------------------------------------------------------------
 
 resource "aws_s3_bucket" "lambda_code" {
-  bucket = "${var.prefix}-lambda-code-${local.account_id}"
+  bucket = local.bucket_name
 
   tags = merge(var.tags, {
-    Name    = "${var.prefix}-lambda-code"
+    Name    = local.bucket_name
     Purpose = "Lambda code storage for Step Functions dynamic deployment"
   })
 }
