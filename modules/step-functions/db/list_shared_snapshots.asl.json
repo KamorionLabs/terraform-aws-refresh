@@ -47,7 +47,7 @@
     "FormatSnapshotList": {
       "Type": "Pass",
       "Parameters": {
-        "Snapshots.$": "States.Array($.FilterResult.FilteredSnapshots[*].{SnapshotId: DbClusterSnapshotIdentifier, SnapshotArn: DbClusterSnapshotArn, Status: Status, CreateTime: SnapshotCreateTime, Engine: Engine, EngineVersion: EngineVersion, StorageEncrypted: StorageEncrypted, KmsKeyId: KmsKeyId, SourceCluster: DbClusterIdentifier})",
+        "Snapshots.$": "$.FilterResult.FilteredSnapshots",
         "TotalCount.$": "States.ArrayLength($.FilterResult.FilteredSnapshots)"
       },
       "ResultPath": "$.FormattedResult",
