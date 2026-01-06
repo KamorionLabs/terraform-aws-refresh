@@ -119,7 +119,7 @@ resource "aws_lambda_function" "functions" {
   memory_size      = lookup(local.lambda_functions_filtered[each.key], "memory_size", 320)
 
   vpc_config {
-    security_group_ids = var.lambda_security_group_ids
+    security_group_ids = var.create_lambda_security_group ? [aws_security_group.lambda[0].id] : var.lambda_security_group_ids
     subnet_ids         = var.lambda_subnet_ids
   }
 
