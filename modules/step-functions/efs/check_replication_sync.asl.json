@@ -345,13 +345,17 @@
               "Credentials": {
                 "RoleArn.$": "$.SourceAccount.RoleArn"
               },
-              "End": true,
+              "Next": "SourceFlagDeleted",
               "Catch": [
                 {
                   "ErrorEquals": ["States.ALL"],
-                  "End": true
+                  "Next": "SourceFlagDeleted"
                 }
               ]
+            },
+            "SourceFlagDeleted": {
+              "Type": "Pass",
+              "End": true
             }
           }
         },
@@ -371,13 +375,17 @@
               "Credentials": {
                 "RoleArn.$": "$.DestinationAccount.RoleArn"
               },
-              "End": true,
+              "Next": "DestinationFlagDeleted",
               "Catch": [
                 {
                   "ErrorEquals": ["States.ALL"],
-                  "End": true
+                  "Next": "DestinationFlagDeleted"
                 }
               ]
+            },
+            "DestinationFlagDeleted": {
+              "Type": "Pass",
+              "End": true
             }
           }
         }
