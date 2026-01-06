@@ -67,9 +67,21 @@ variable "enable_eks" {
 }
 
 variable "deploy_lambdas" {
-  description = "Deploy Lambda helper functions"
+  description = "Deploy Lambda helper functions. Set to false to use existing_lambda_role_arn for dynamic Lambda creation."
   type        = bool
   default     = true
+}
+
+variable "existing_lambda_role_arn" {
+  description = "ARN of existing Lambda execution role. Used when deploy_lambdas is false but dynamic Lambda creation is still needed."
+  type        = string
+  default     = null
+}
+
+variable "existing_lambda_role_name" {
+  description = "Name of existing Lambda execution role (for reference). Optional."
+  type        = string
+  default     = null
 }
 
 # -----------------------------------------------------------------------------
