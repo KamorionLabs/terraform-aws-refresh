@@ -13,9 +13,11 @@ module "lambda_code" {
 
   prefix      = var.prefix
   bucket_name = var.lambda_code_bucket_name
-  tags        = var.tags
+  # Note: tags passed separately to bucket only (S3 objects limited to 10 tags)
+  tags = var.tags
 
   # Cross-account access for Step Functions to deploy Lambdas dynamically
+  # Note: roles must exist before bucket policy can be applied
   cross_account_role_arns = concat(var.source_role_arns, var.destination_role_arns)
 }
 

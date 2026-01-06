@@ -134,6 +134,10 @@ resource "aws_s3_object" "lambda_code" {
   source = each.value.output_path
   etag   = each.value.output_md5
 
-  # S3 Object tags limited to 10 - override default_tags
-  tags = {}
+  # S3 Object tags limited to 10 - completely disable provider default_tags
+  override_provider {
+    default_tags {
+      tags = {}
+    }
+  }
 }
