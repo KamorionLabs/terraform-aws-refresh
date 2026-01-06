@@ -67,12 +67,9 @@ resource "aws_iam_role_policy" "orchestrator_step_functions" {
         Resource = "arn:aws:states:${data.aws_region.current.id}:${local.orchestrator_account_id}:stateMachine:${var.prefix}-*"
       },
       {
-        Effect = "Allow"
-        Action = [
-          "states:StartExecution.sync",
-          "states:StartExecution.sync:2"
-        ]
-        Resource = "arn:aws:states:${data.aws_region.current.id}:${local.orchestrator_account_id}:stateMachine:${var.prefix}-*"
+        Effect   = "Allow"
+        Action   = "events:PutTargets"
+        Resource = "arn:aws:events:${data.aws_region.current.id}:${local.orchestrator_account_id}:rule/StepFunctionsGetEventsForStepFunctionsExecutionRule"
       },
       {
         Effect = "Allow"
