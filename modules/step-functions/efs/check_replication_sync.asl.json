@@ -16,8 +16,8 @@
         "MaxWaitCount": 60,
         "WaitCount": 0,
         "Mode.$": "States.ArrayGetItem(States.Array($.Mode, 'wait'), 0)",
-        "SourceLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.Prefix, $.Context)",
-        "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.Prefix, $.Context)"
+        "SourceLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.SourceLambdaPrefix, $.Context)",
+        "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.DestinationLambdaPrefix, $.Context)"
       },
       "Next": "GetReplicationStatus"
     },
