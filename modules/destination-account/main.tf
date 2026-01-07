@@ -311,6 +311,15 @@ resource "aws_iam_role_policy" "ssm_access" {
           "ssm:DeleteParameter"
         ]
         Resource = "arn:aws:ssm:*:${local.account_id}:parameter/${local.prefixes.lambda}/*"
+      },
+      {
+        Sid    = "SSMReadAllParameters"
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = "arn:aws:ssm:*:${local.account_id}:parameter/*"
       }
     ]
   })
@@ -446,32 +455,6 @@ resource "aws_iam_role_policy" "sns_access" {
           "sns:Publish"
         ]
         Resource = var.sns_topic_arn
-      }
-    ]
-  })
-}
-
-# -----------------------------------------------------------------------------
-# IAM Policy - SSM Parameter Store (for EFS subpath configuration)
-# -----------------------------------------------------------------------------
-
-resource "aws_iam_role_policy" "ssm_access" {
-  count = local.should_attach_policies && var.enable_efs ? 1 : 0
-
-  name = "${local.prefixes.iam_policy}-ssm-access"
-  role = local.role_id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "SSMGetParameter"
-        Effect = "Allow"
-        Action = [
-          "ssm:GetParameter",
-          "ssm:GetParameters"
-        ]
-        Resource = "arn:aws:ssm:*:${local.account_id}:parameter/*"
       }
     ]
   })
