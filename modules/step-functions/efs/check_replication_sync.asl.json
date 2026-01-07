@@ -609,10 +609,37 @@
         {
           "Variable": "$.WriteFlagResult.StatusCode",
           "NumericEquals": 200,
-          "Next": "WaitForFlagPropagation"
+          "Next": "RecordFlagWriteTime"
         }
       ],
       "Default": "FlagWriteFailed"
+    },
+    "RecordFlagWriteTime": {
+      "Type": "Pass",
+      "Comment": "Record timestamp when flag file was written to source EFS",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "Context.$": "$.Context",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "$.WaitCount",
+        "Mode.$": "$.Mode",
+        "ReplicationStatus.$": "$.ReplicationStatus",
+        "FlagId.$": "$.FlagId",
+        "FlagRetryCount.$": "$.FlagRetryCount",
+        "MaxFlagRetries.$": "$.MaxFlagRetries",
+        "SourceAccessPoint.$": "$.SourceAccessPoint",
+        "DestinationAccessPoint.$": "$.DestinationAccessPoint",
+        "WriteFlagResult.$": "$.WriteFlagResult",
+        "FlagWriteTimestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "WaitForFlagPropagation"
     },
     "FlagWriteFailed": {
       "Type": "Pass",
@@ -755,7 +782,7 @@
               "BooleanEquals": true
             }
           ],
-          "Next": "CleanupFlagFiles"
+          "Next": "RecordFlagDetectedTime"
         },
         {
           "Variable": "$.FlagRetryCount",
@@ -764,6 +791,30 @@
         }
       ],
       "Default": "FlagSyncTimeout"
+    },
+    "RecordFlagDetectedTime": {
+      "Type": "Pass",
+      "Comment": "Record timestamp when flag file was detected on destination EFS",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "Context.$": "$.Context",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "Mode.$": "$.Mode",
+        "ReplicationStatus.$": "$.ReplicationStatus",
+        "FlagId.$": "$.FlagId",
+        "FlagRetryCount.$": "$.FlagRetryCount",
+        "SourceAccessPoint.$": "$.SourceAccessPoint",
+        "DestinationAccessPoint.$": "$.DestinationAccessPoint",
+        "CheckFlagResult.$": "$.CheckFlagResult",
+        "FlagWriteTimestamp.$": "$.FlagWriteTimestamp",
+        "FlagDetectedTimestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "CleanupFlagFiles"
     },
     "IncrementFlagRetry": {
       "Type": "Pass",
@@ -786,7 +837,8 @@
         "SourceAccessPoint.$": "$.SourceAccessPoint",
         "DestinationAccessPoint.$": "$.DestinationAccessPoint",
         "FlagRetryCount.$": "States.MathAdd($.FlagRetryCount, 1)",
-        "MaxFlagRetries.$": "$.MaxFlagRetries"
+        "MaxFlagRetries.$": "$.MaxFlagRetries",
+        "FlagWriteTimestamp.$": "$.FlagWriteTimestamp"
       },
       "Next": "WaitBeforeFlagRetry"
     },
@@ -872,6 +924,98 @@
         }
       ],
       "ResultPath": null,
+      "Next": "ListDirectories"
+    },
+    "ListDirectories": {
+      "Type": "Parallel",
+      "Comment": "List root directory contents from both source and destination EFS",
+      "Branches": [
+        {
+          "StartAt": "ListSourceDirectory",
+          "States": {
+            "ListSourceDirectory": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName.$": "$.SourceLambdaName",
+                "Payload": {
+                  "action": "list",
+                  "max_files": 100
+                }
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "StatusCode.$": "$.Payload.statusCode",
+                "Body.$": "States.StringToJson($.Payload.body)"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "SourceListFailed"
+                }
+              ]
+            },
+            "SourceListFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "StatusCode": 500,
+                "Body": {
+                  "action": "list",
+                  "error": "Failed to list source directory"
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "ListDestinationDirectory",
+          "States": {
+            "ListDestinationDirectory": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName.$": "$.DestinationLambdaName",
+                "Payload": {
+                  "action": "list",
+                  "max_files": 100
+                }
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "ResultSelector": {
+                "StatusCode.$": "$.Payload.statusCode",
+                "Body.$": "States.StringToJson($.Payload.body)"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.Error",
+                  "Next": "DestinationListFailed"
+                }
+              ]
+            },
+            "DestinationListFailed": {
+              "Type": "Pass",
+              "Parameters": {
+                "StatusCode": 500,
+                "Body": {
+                  "action": "list",
+                  "error": "Failed to list destination directory"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": "$.DirectoryListings",
       "Next": "CleanupAllAccessPoints"
     },
     "CleanupAllAccessPointsAfterWrite": {
@@ -1061,13 +1205,26 @@
         "ModuleName": "check_replication_sync",
         "SourceFileSystemId.$": "$.SourceFileSystemId",
         "DestinationFileSystemId.$": "$.ReplicationStatus.Replications[0].Destinations[0].FileSystemId",
-        "LastReplicatedTimestamp.$": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp",
         "FlagFileVerified": true,
         "FlagId.$": "$.FlagId",
         "Context.$": "$.Context",
         "SourceLambdaName.$": "$.SourceLambdaName",
         "DestinationLambdaName.$": "$.DestinationLambdaName",
-        "Message": "Replication sync verified with flag file test"
+        "Message": "Replication sync verified with flag file test",
+        "ReplicationInfo": {
+          "CreationTime.$": "$.ReplicationStatus.Replications[0].CreationTime",
+          "Status.$": "$.ReplicationStatus.Replications[0].Destinations[0].Status",
+          "LastReplicatedTimestamp.$": "$.ReplicationStatus.Replications[0].Destinations[0].LastReplicatedTimestamp",
+          "SourceFileSystemArn.$": "$.ReplicationStatus.Replications[0].SourceFileSystemArn",
+          "DestinationFileSystemArn.$": "$.ReplicationStatus.Replications[0].Destinations[0].FileSystemId"
+        },
+        "PropagationTiming": {
+          "FlagWriteTimestamp.$": "$.FlagWriteTimestamp",
+          "FlagDetectedTimestamp.$": "$.FlagDetectedTimestamp",
+          "FlagRetryCount.$": "$.FlagRetryCount"
+        },
+        "SourceDirectoryListing.$": "$.DirectoryListings[0].Body",
+        "DestinationDirectoryListing.$": "$.DirectoryListings[1].Body"
       },
       "Next": "CheckSucceeded"
     },

@@ -7,6 +7,7 @@ Actions:
   - write: Create a flag file with timestamp and UUID
   - check: Verify flag file exists and return its content
   - delete: Remove the flag file
+  - list: List files at the root (or subpath) with details similar to ls -l
 
 Used by Step Functions: verify_replication_sync
 """
@@ -14,6 +15,7 @@ Used by Step Functions: verify_replication_sync
 import json
 import logging
 import os
+import stat
 import uuid
 from datetime import datetime, timezone
 
@@ -69,6 +71,9 @@ def lambda_handler(event, context):
             return check_flag_file(base_path, flag_id, timeout_seconds)
         elif action == "delete":
             return delete_flag_file(base_path, flag_id)
+        elif action == "list":
+            max_files = event.get("max_files", 50)
+            return list_directory(base_path, max_files)
         else:
             return error_response(400, "INVALID_ACTION", f"Unknown action: {action}")
 
@@ -192,6 +197,82 @@ def delete_flag_file(base_path: str, flag_id: str) -> dict:
             "flag_id": flag_id,
             "flag_path": flag_path,
             "deleted": deleted
+        })
+    }
+
+
+def list_directory(base_path: str, max_files: int = 50) -> dict:
+    """
+    List files in directory with details similar to ls -l.
+    Returns file type, permissions, size, modification time, and name.
+    """
+    if not os.path.exists(base_path):
+        return error_response(404, "PATH_NOT_FOUND", f"Path does not exist: {base_path}")
+
+    if not os.path.isdir(base_path):
+        return error_response(400, "NOT_A_DIRECTORY", f"Path is not a directory: {base_path}")
+
+    files = []
+    try:
+        entries = sorted(os.listdir(base_path))[:max_files]
+
+        for entry in entries:
+            full_path = os.path.join(base_path, entry)
+            try:
+                st = os.stat(full_path)
+
+                # Determine file type
+                if stat.S_ISDIR(st.st_mode):
+                    file_type = "d"
+                elif stat.S_ISLNK(st.st_mode):
+                    file_type = "l"
+                elif stat.S_ISREG(st.st_mode):
+                    file_type = "-"
+                else:
+                    file_type = "?"
+
+                # Format permissions like ls -l
+                mode = st.st_mode
+                perms = ""
+                for who in ["USR", "GRP", "OTH"]:
+                    for what in ["R", "W", "X"]:
+                        perm_bit = getattr(stat, f"S_I{what}{who}")
+                        perms += what.lower() if mode & perm_bit else "-"
+
+                # Format modification time
+                mtime = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
+
+                files.append({
+                    "name": entry,
+                    "type": file_type,
+                    "permissions": f"{file_type}{perms}",
+                    "mode_octal": oct(mode)[-3:],
+                    "uid": st.st_uid,
+                    "gid": st.st_gid,
+                    "size": st.st_size,
+                    "mtime": mtime.isoformat(),
+                    "mtime_human": mtime.strftime("%b %d %H:%M")
+                })
+            except (OSError, PermissionError) as e:
+                files.append({
+                    "name": entry,
+                    "error": str(e)
+                })
+
+        logger.info(f"Listed {len(files)} files in {base_path}")
+
+    except PermissionError as e:
+        return error_response(403, "PERMISSION_DENIED", str(e))
+
+    return {
+        "statusCode": 200,
+        "body": json.dumps({
+            "action": "list",
+            "path": base_path,
+            "file_count": len(files),
+            "truncated": len(entries) >= max_files if 'entries' in dir() else False,
+            "files": files,
+            "listed_at": datetime.now(timezone.utc).isoformat()
         })
     }
 
