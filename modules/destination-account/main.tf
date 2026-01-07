@@ -240,6 +240,7 @@ resource "aws_iam_role_policy" "lambda_access" {
           "lambda:GetFunction",
           "lambda:GetFunctionConfiguration",
           "lambda:UpdateFunctionConfiguration",
+          "lambda:UpdateFunctionCode",
           "lambda:CreateFunction",
           "lambda:DeleteFunction",
           "lambda:TagResource"
