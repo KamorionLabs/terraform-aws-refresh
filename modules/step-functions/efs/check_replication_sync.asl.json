@@ -177,7 +177,7 @@
         "ReplicationStatus.$": "$.ReplicationStatus",
         "FlagId.$": "States.UUID()",
         "FlagRetryCount": 0,
-        "MaxFlagRetries": 5
+        "MaxFlagRetries": 15
       },
       "Next": "EnsureSourceLambdaExists"
     },
@@ -266,6 +266,18 @@
       "Parameters": {
         "ClientToken.$": "States.Format('src-{}-{}', $.Context, $.FlagId)",
         "FileSystemId.$": "$.SourceFileSystemId",
+        "PosixUser": {
+          "Uid": 0,
+          "Gid": 0
+        },
+        "RootDirectory": {
+          "Path": "/",
+          "CreationInfo": {
+            "OwnerUid": 0,
+            "OwnerGid": 0,
+            "Permissions": "755"
+          }
+        },
         "Tags": [
           {
             "Key": "Name",
@@ -445,6 +457,18 @@
       "Parameters": {
         "ClientToken.$": "States.Format('dst-{}-{}', $.Context, $.FlagId)",
         "FileSystemId.$": "$.DestinationFileSystemId",
+        "PosixUser": {
+          "Uid": 0,
+          "Gid": 0
+        },
+        "RootDirectory": {
+          "Path": "/",
+          "CreationInfo": {
+            "OwnerUid": 0,
+            "OwnerGid": 0,
+            "Permissions": "755"
+          }
+        },
         "Tags": [
           {
             "Key": "Name",
@@ -557,7 +581,7 @@
         "Body.$": "States.StringToJson($.Payload.body)"
       },
       "ResultPath": "$.WriteFlagResult",
-      "Next": "WaitForFlagPropagation",
+      "Next": "VerifyFlagWriteSuccess",
       "Retry": [
         {
           "ErrorEquals": [
@@ -577,6 +601,99 @@
           "Next": "CleanupAllAccessPoints"
         }
       ]
+    },
+    "VerifyFlagWriteSuccess": {
+      "Type": "Choice",
+      "Comment": "Verify that flag file was written successfully before waiting for propagation",
+      "Choices": [
+        {
+          "Variable": "$.WriteFlagResult.StatusCode",
+          "NumericEquals": 200,
+          "Next": "WaitForFlagPropagation"
+        }
+      ],
+      "Default": "FlagWriteFailed"
+    },
+    "FlagWriteFailed": {
+      "Type": "Pass",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "SourceAccessPoint.$": "$.SourceAccessPoint",
+        "DestinationAccessPoint.$": "$.DestinationAccessPoint",
+        "FlagWriteError": {
+          "StatusCode.$": "$.WriteFlagResult.StatusCode",
+          "Body.$": "$.WriteFlagResult.Body"
+        }
+      },
+      "Next": "CleanupAndFailOnWriteError"
+    },
+    "CleanupAndFailOnWriteError": {
+      "Type": "Parallel",
+      "Comment": "Cleanup access points then fail",
+      "Branches": [
+        {
+          "StartAt": "DeleteSourceAPOnWriteError",
+          "States": {
+            "DeleteSourceAPOnWriteError": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.SourceAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.SourceAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "SourceAPDeleteFailedOnWrite"
+                }
+              ]
+            },
+            "SourceAPDeleteFailedOnWrite": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "DeleteDestinationAPOnWriteError",
+          "States": {
+            "DeleteDestinationAPOnWriteError": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:efs:deleteAccessPoint",
+              "Parameters": {
+                "AccessPointId.$": "$.DestinationAccessPoint.AccessPointId"
+              },
+              "Credentials": {
+                "RoleArn.$": "$.DestinationAccount.RoleArn"
+              },
+              "End": true,
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "Next": "DestinationAPDeleteFailedOnWrite"
+                }
+              ]
+            },
+            "DestinationAPDeleteFailedOnWrite": {
+              "Type": "Pass",
+              "End": true
+            }
+          }
+        }
+      ],
+      "ResultPath": null,
+      "Next": "FlagWriteCheckFailed"
+    },
+    "FlagWriteCheckFailed": {
+      "Type": "Fail",
+      "Error": "FlagWriteFailed",
+      "Cause": "Failed to write flag file to source EFS - check Lambda permissions and EFS access point configuration"
     },
     "WaitForFlagPropagation": {
       "Type": "Wait",
@@ -642,7 +759,7 @@
         },
         {
           "Variable": "$.FlagRetryCount",
-          "NumericLessThan": 5,
+          "NumericLessThanPath": "$.MaxFlagRetries",
           "Next": "IncrementFlagRetry"
         }
       ],
