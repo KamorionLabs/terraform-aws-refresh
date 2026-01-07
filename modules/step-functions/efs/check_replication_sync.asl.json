@@ -1,10 +1,10 @@
 {
-  "Comment": "Monitors EFS cross-account replication sync status with lazy Lambda creation. Creates context-specific Lambdas on first use, reuses them on subsequent runs.",
+  "Comment": "Monitors EFS cross-account replication sync status with lazy Lambda creation. Creates context-specific Lambdas on first use, reuses them on subsequent runs. Supports optional SSM parameters for subpath configuration.",
   "StartAt": "InitializeState",
   "States": {
     "InitializeState": {
       "Type": "Pass",
-      "Comment": "Initialize state and build Lambda names based on context",
+      "Comment": "Initialize state and build Lambda names. Optional SourceSubpathSSMParameter/DestinationSubpathSSMParameter specify SSM parameters containing subpaths for flag file operations.",
       "Parameters": {
         "SourceFileSystemId.$": "$.SourceFileSystemId",
         "DestinationFileSystemId.$": "$.DestinationFileSystemId",
@@ -17,7 +17,159 @@
         "WaitCount": 0,
         "Mode.$": "States.ArrayGetItem(States.Array($.Mode, 'wait'), 0)",
         "SourceLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.SourceLambdaPrefix, $.Context)",
-        "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.DestinationLambdaPrefix, $.Context)"
+        "DestinationLambdaName.$": "States.Format('{}-check-flag-file-{}', $.LambdaConfig.DestinationLambdaPrefix, $.Context)",
+        "SourceSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($.SourceSubpathSSMParameter, ''), 0)",
+        "DestinationSubpathSSMParameter.$": "States.ArrayGetItem(States.Array($.DestinationSubpathSSMParameter, ''), 0)",
+        "SourceSubpath": "",
+        "DestinationSubpath": ""
+      },
+      "Next": "CheckIfSubpathConfigured"
+    },
+    "CheckIfSubpathConfigured": {
+      "Type": "Choice",
+      "Comment": "Check if SSM parameters for subpaths are configured",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.SourceSubpathSSMParameter",
+              "IsPresent": true
+            },
+            {
+              "Not": {
+                "Variable": "$.SourceSubpathSSMParameter",
+                "StringEquals": ""
+              }
+            }
+          ],
+          "Next": "ReadSourceSubpathFromSSM"
+        }
+      ],
+      "Default": "GetReplicationStatus"
+    },
+    "ReadSourceSubpathFromSSM": {
+      "Type": "Task",
+      "Comment": "Read source EFS subpath from SSM Parameter Store in source account",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name.$": "$.SourceSubpathSSMParameter"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "Value.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.SourceSubpathResult",
+      "Next": "StoreSourceSubpath",
+      "Catch": [
+        {
+          "ErrorEquals": ["Ssm.ParameterNotFoundException"],
+          "ResultPath": "$.SourceSubpathError",
+          "Comment": "Parameter not found, continue with empty subpath",
+          "Next": "CheckIfDestinationSubpathConfigured"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.SourceSubpathError",
+          "Next": "CheckIfDestinationSubpathConfigured"
+        }
+      ]
+    },
+    "StoreSourceSubpath": {
+      "Type": "Pass",
+      "Comment": "Store the source subpath value in state",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "Context.$": "$.Context",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "$.WaitCount",
+        "Mode.$": "$.Mode",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "SourceSubpathSSMParameter.$": "$.SourceSubpathSSMParameter",
+        "DestinationSubpathSSMParameter.$": "$.DestinationSubpathSSMParameter",
+        "SourceSubpath.$": "$.SourceSubpathResult.Value",
+        "DestinationSubpath.$": "$.DestinationSubpath"
+      },
+      "Next": "CheckIfDestinationSubpathConfigured"
+    },
+    "CheckIfDestinationSubpathConfigured": {
+      "Type": "Choice",
+      "Comment": "Check if destination SSM parameter for subpath is configured",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.DestinationSubpathSSMParameter",
+              "IsPresent": true
+            },
+            {
+              "Not": {
+                "Variable": "$.DestinationSubpathSSMParameter",
+                "StringEquals": ""
+              }
+            }
+          ],
+          "Next": "ReadDestinationSubpathFromSSM"
+        }
+      ],
+      "Default": "GetReplicationStatus"
+    },
+    "ReadDestinationSubpathFromSSM": {
+      "Type": "Task",
+      "Comment": "Read destination EFS subpath from SSM Parameter Store in destination account",
+      "Resource": "arn:aws:states:::aws-sdk:ssm:getParameter",
+      "Parameters": {
+        "Name.$": "$.DestinationSubpathSSMParameter"
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultSelector": {
+        "Value.$": "$.Parameter.Value"
+      },
+      "ResultPath": "$.DestinationSubpathResult",
+      "Next": "StoreDestinationSubpath",
+      "Catch": [
+        {
+          "ErrorEquals": ["Ssm.ParameterNotFoundException"],
+          "ResultPath": "$.DestinationSubpathError",
+          "Comment": "Parameter not found, continue with empty subpath",
+          "Next": "GetReplicationStatus"
+        },
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.DestinationSubpathError",
+          "Next": "GetReplicationStatus"
+        }
+      ]
+    },
+    "StoreDestinationSubpath": {
+      "Type": "Pass",
+      "Comment": "Store the destination subpath value in state",
+      "Parameters": {
+        "SourceFileSystemId.$": "$.SourceFileSystemId",
+        "DestinationFileSystemId.$": "$.DestinationFileSystemId",
+        "SourceAccount.$": "$.SourceAccount",
+        "DestinationAccount.$": "$.DestinationAccount",
+        "Context.$": "$.Context",
+        "LambdaConfig.$": "$.LambdaConfig",
+        "WaitSeconds.$": "$.WaitSeconds",
+        "MaxWaitCount.$": "$.MaxWaitCount",
+        "WaitCount.$": "$.WaitCount",
+        "Mode.$": "$.Mode",
+        "SourceLambdaName.$": "$.SourceLambdaName",
+        "DestinationLambdaName.$": "$.DestinationLambdaName",
+        "SourceSubpathSSMParameter.$": "$.SourceSubpathSSMParameter",
+        "DestinationSubpathSSMParameter.$": "$.DestinationSubpathSSMParameter",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpathResult.Value"
       },
       "Next": "GetReplicationStatus"
     },
@@ -175,6 +327,8 @@
         "WaitCount.$": "$.WaitCount",
         "Mode.$": "$.Mode",
         "ReplicationStatus.$": "$.ReplicationStatus",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
         "FlagId.$": "States.UUID()",
         "FlagRetryCount": 0,
         "MaxFlagRetries": 15
@@ -682,7 +836,8 @@
         "FunctionName.$": "$.SourceLambdaName",
         "Payload": {
           "action": "write",
-          "flag_id.$": "$.FlagId"
+          "flag_id.$": "$.FlagId",
+          "subpath.$": "$.SourceSubpath"
         }
       },
       "Credentials": {
@@ -743,6 +898,8 @@
         "WaitCount.$": "$.WaitCount",
         "Mode.$": "$.Mode",
         "ReplicationStatus.$": "$.ReplicationStatus",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
         "FlagId.$": "$.FlagId",
         "FlagRetryCount.$": "$.FlagRetryCount",
         "MaxFlagRetries.$": "$.MaxFlagRetries",
@@ -847,7 +1004,8 @@
         "Payload": {
           "action": "check",
           "flag_id.$": "$.FlagId",
-          "timeout_seconds": 600
+          "timeout_seconds": 600,
+          "subpath.$": "$.DestinationSubpath"
         }
       },
       "Credentials": {
@@ -918,6 +1076,8 @@
         "DestinationLambdaName.$": "$.DestinationLambdaName",
         "Mode.$": "$.Mode",
         "ReplicationStatus.$": "$.ReplicationStatus",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
         "FlagId.$": "$.FlagId",
         "FlagRetryCount.$": "$.FlagRetryCount",
         "SourceAccessPoint.$": "$.SourceAccessPoint",
@@ -944,6 +1104,8 @@
         "WaitCount.$": "$.WaitCount",
         "Mode.$": "$.Mode",
         "ReplicationStatus.$": "$.ReplicationStatus",
+        "SourceSubpath.$": "$.SourceSubpath",
+        "DestinationSubpath.$": "$.DestinationSubpath",
         "FlagId.$": "$.FlagId",
         "WriteFlagResult.$": "$.WriteFlagResult",
         "SourceAccessPoint.$": "$.SourceAccessPoint",
@@ -984,7 +1146,8 @@
                 "FunctionName.$": "$.SourceLambdaName",
                 "Payload": {
                   "action": "delete",
-                  "flag_id.$": "$.FlagId"
+                  "flag_id.$": "$.FlagId",
+                  "subpath.$": "$.SourceSubpath"
                 }
               },
               "Credentials": {
@@ -1014,7 +1177,8 @@
                 "FunctionName.$": "$.DestinationLambdaName",
                 "Payload": {
                   "action": "delete",
-                  "flag_id.$": "$.FlagId"
+                  "flag_id.$": "$.FlagId",
+                  "subpath.$": "$.DestinationSubpath"
                 }
               },
               "Credentials": {
@@ -1052,7 +1216,8 @@
                 "FunctionName.$": "$.SourceLambdaName",
                 "Payload": {
                   "action": "list",
-                  "max_files": 100
+                  "max_files": 100,
+                  "subpath.$": "$.SourceSubpath"
                 }
               },
               "Credentials": {
@@ -1094,7 +1259,8 @@
                 "FunctionName.$": "$.DestinationLambdaName",
                 "Payload": {
                   "action": "list",
-                  "max_files": 100
+                  "max_files": 100,
+                  "subpath.$": "$.DestinationSubpath"
                 }
               },
               "Credentials": {
@@ -1144,7 +1310,8 @@
                 "FunctionName.$": "$.SourceLambdaName",
                 "Payload": {
                   "action": "delete",
-                  "flag_id.$": "$.FlagId"
+                  "flag_id.$": "$.FlagId",
+                  "subpath.$": "$.SourceSubpath"
                 }
               },
               "Credentials": {
