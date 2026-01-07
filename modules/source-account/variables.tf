@@ -143,3 +143,14 @@ variable "efs_cidr_blocks" {
   type        = list(string)
   default     = ["10.0.0.0/8"]
 }
+
+# -----------------------------------------------------------------------------
+# Dynamic Lambda Configuration
+# For Lambdas created dynamically by Step Functions (may use different prefixes)
+# -----------------------------------------------------------------------------
+
+variable "dynamic_lambda_prefix" {
+  description = "Prefix for dynamic Lambdas created by Step Functions (defaults to var.prefix). Used in IAM policies alongside resource_prefixes.lambda."
+  type        = string
+  default     = null
+}
