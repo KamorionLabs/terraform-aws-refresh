@@ -191,7 +191,7 @@
         "RoleArn.$": "$.SourceAccount.RoleArn"
       },
       "ResultPath": "$.SourceLambdaInfo",
-      "Next": "CreateSourceAccessPoint",
+      "Next": "CheckIfSourceLambdaCodeUpdateNeeded",
       "Catch": [
         {
           "ErrorEquals": ["Lambda.ResourceNotFoundException"],
@@ -204,6 +204,62 @@
           "Next": "CheckFailed"
         }
       ]
+    },
+    "CheckIfSourceLambdaCodeUpdateNeeded": {
+      "Type": "Choice",
+      "Comment": "Check if ForceUpdateLambdaCode flag is set to update existing Lambda code",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.LambdaConfig.ForceUpdateLambdaCode",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.LambdaConfig.ForceUpdateLambdaCode",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "UpdateSourceLambdaCode"
+        }
+      ],
+      "Default": "CreateSourceAccessPoint"
+    },
+    "UpdateSourceLambdaCode": {
+      "Type": "Task",
+      "Comment": "Update existing Lambda code from S3 when ForceUpdateLambdaCode is true",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:updateFunctionCode",
+      "Parameters": {
+        "FunctionName.$": "$.SourceLambdaName",
+        "S3Bucket.$": "$.LambdaConfig.CodeS3Bucket",
+        "S3Key.$": "$.LambdaConfig.CodeS3Key",
+        "Architectures": ["arm64"]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.SourceAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitSourceLambdaCodeUpdate",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ResourceConflictException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 6,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CheckFailed"
+        }
+      ]
+    },
+    "WaitSourceLambdaCodeUpdate": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "CreateSourceAccessPoint"
     },
     "CreateSourceLambda": {
       "Type": "Task",
@@ -382,7 +438,7 @@
         "RoleArn.$": "$.DestinationAccount.RoleArn"
       },
       "ResultPath": "$.DestinationLambdaInfo",
-      "Next": "CreateDestinationAccessPoint",
+      "Next": "CheckIfDestinationLambdaCodeUpdateNeeded",
       "Catch": [
         {
           "ErrorEquals": ["Lambda.ResourceNotFoundException"],
@@ -395,6 +451,62 @@
           "Next": "CleanupSourceAccessPoint"
         }
       ]
+    },
+    "CheckIfDestinationLambdaCodeUpdateNeeded": {
+      "Type": "Choice",
+      "Comment": "Check if ForceUpdateLambdaCode flag is set to update existing Lambda code",
+      "Choices": [
+        {
+          "And": [
+            {
+              "Variable": "$.LambdaConfig.ForceUpdateLambdaCode",
+              "IsPresent": true
+            },
+            {
+              "Variable": "$.LambdaConfig.ForceUpdateLambdaCode",
+              "BooleanEquals": true
+            }
+          ],
+          "Next": "UpdateDestinationLambdaCode"
+        }
+      ],
+      "Default": "CreateDestinationAccessPoint"
+    },
+    "UpdateDestinationLambdaCode": {
+      "Type": "Task",
+      "Comment": "Update existing Lambda code from S3 when ForceUpdateLambdaCode is true",
+      "Resource": "arn:aws:states:::aws-sdk:lambda:updateFunctionCode",
+      "Parameters": {
+        "FunctionName.$": "$.DestinationLambdaName",
+        "S3Bucket.$": "$.LambdaConfig.CodeS3Bucket",
+        "S3Key.$": "$.LambdaConfig.CodeS3Key",
+        "Architectures": ["arm64"]
+      },
+      "Credentials": {
+        "RoleArn.$": "$.DestinationAccount.RoleArn"
+      },
+      "ResultPath": null,
+      "Next": "WaitDestinationLambdaCodeUpdate",
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ResourceConflictException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 6,
+          "BackoffRate": 1.5
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "ResultPath": "$.Error",
+          "Next": "CleanupSourceAccessPoint"
+        }
+      ]
+    },
+    "WaitDestinationLambdaCodeUpdate": {
+      "Type": "Wait",
+      "Seconds": 5,
+      "Next": "CreateDestinationAccessPoint"
     },
     "CreateDestinationLambda": {
       "Type": "Task",
