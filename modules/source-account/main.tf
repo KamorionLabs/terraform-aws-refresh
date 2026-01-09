@@ -38,8 +38,16 @@ locals {
 }
 
 # -----------------------------------------------------------------------------
-# IAM Role - Assumable by Orchestrator (optional)
+# IAM Role - Assumable by Orchestrator and additional principals (optional)
 # -----------------------------------------------------------------------------
+
+locals {
+  # Combine orchestrator role with additional trust principals
+  all_trust_principals = compact(concat(
+    var.orchestrator_role_arn != null ? [var.orchestrator_role_arn] : [],
+    var.additional_trust_principal_arns
+  ))
+}
 
 resource "aws_iam_role" "source" {
   count = var.create_role ? 1 : 0
@@ -53,7 +61,7 @@ resource "aws_iam_role" "source" {
         {
           Effect = "Allow"
           Principal = {
-            AWS = var.orchestrator_role_arn
+            AWS = local.all_trust_principals
           }
           Action = "sts:AssumeRole"
         },

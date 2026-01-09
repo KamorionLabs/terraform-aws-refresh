@@ -28,6 +28,12 @@ variable "orchestrator_role_arn" {
   default     = null
 }
 
+variable "additional_trust_principal_arns" {
+  description = "Additional IAM role ARNs that can assume this role (e.g., ops-dashboard Step Functions role)"
+  type        = list(string)
+  default     = []
+}
+
 variable "aws_organization_id" {
   description = "AWS Organization ID for additional trust policy condition (optional)"
   type        = string
