@@ -141,6 +141,43 @@ variable "eks_access_scope_namespaces" {
   default     = []
 }
 
+variable "eks_access_policies" {
+  description = <<-EOT
+    List of EKS access policies to associate with the role.
+    Each policy can have its own scope (cluster or namespace).
+    If empty, falls back to eks_access_policy_arn/eks_access_scope_type/eks_access_scope_namespaces.
+    Example:
+      eks_access_policies = [
+        {
+          name       = "view"
+          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy"
+          scope_type = "cluster"
+          namespaces = []
+        },
+        {
+          name       = "admin"
+          policy_arn = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy"
+          scope_type = "namespace"
+          namespaces = ["rubix-mro-mi1-staging", "rubix-mro-mi2-staging"]
+        }
+      ]
+  EOT
+  type = list(object({
+    name       = string
+    policy_arn = string
+    scope_type = string
+    namespaces = list(string)
+  }))
+  default = []
+
+  validation {
+    condition = alltrue([
+      for p in var.eks_access_policies : contains(["cluster", "namespace"], p.scope_type)
+    ])
+    error_message = "Each policy scope_type must be 'cluster' or 'namespace'."
+  }
+}
+
 # -----------------------------------------------------------------------------
 # Resource ARNs
 # -----------------------------------------------------------------------------

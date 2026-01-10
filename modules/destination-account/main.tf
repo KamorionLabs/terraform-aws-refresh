@@ -482,16 +482,32 @@ resource "aws_eks_access_entry" "destination" {
   tags = var.tags
 }
 
+# Build effective policies list - use new variable if provided, else fallback to legacy variables
+locals {
+  eks_effective_policies = length(var.eks_access_policies) > 0 ? var.eks_access_policies : [
+    {
+      name       = "default"
+      policy_arn = var.eks_access_policy_arn
+      scope_type = var.eks_access_scope_type
+      namespaces = var.eks_access_scope_namespaces
+    }
+  ]
+
+  eks_policies_map = var.create_eks_access_entry && var.eks_cluster_name != null ? {
+    for policy in local.eks_effective_policies : policy.name => policy
+  } : {}
+}
+
 resource "aws_eks_access_policy_association" "destination" {
-  count = var.create_eks_access_entry && var.eks_cluster_name != null ? 1 : 0
+  for_each = local.eks_policies_map
 
   cluster_name  = var.eks_cluster_name
   principal_arn = local.role_arn
-  policy_arn    = var.eks_access_policy_arn
+  policy_arn    = each.value.policy_arn
 
   access_scope {
-    type       = var.eks_access_scope_type
-    namespaces = var.eks_access_scope_type == "namespace" ? var.eks_access_scope_namespaces : null
+    type       = each.value.scope_type
+    namespaces = each.value.scope_type == "namespace" ? each.value.namespaces : null
   }
 
   depends_on = [aws_eks_access_entry.destination]
