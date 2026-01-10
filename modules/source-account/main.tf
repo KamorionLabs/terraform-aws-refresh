@@ -435,7 +435,7 @@ resource "aws_iam_role_policy" "lambda_execution" {
 resource "aws_security_group" "lambda" {
   count = var.deploy_lambda_role && var.create_lambda_security_group ? 1 : 0
 
-  name        = "${local.prefixes.security_group}-lambda-sg"
+  name        = "${local.prefixes.security_group}-source-lambda-sg"
   description = "Security group for Lambda functions (flag file check)"
   vpc_id      = var.vpc_id
 
@@ -444,7 +444,7 @@ resource "aws_security_group" "lambda" {
   }
 
   tags = merge(var.tags, {
-    Name = "${local.prefixes.security_group}-lambda-sg"
+    Name = "${local.prefixes.security_group}-source-lambda-sg"
   })
 }
 
