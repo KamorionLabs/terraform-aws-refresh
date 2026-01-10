@@ -11,6 +11,15 @@ locals {
     # Scaling
     scale_nodegroup_asg = "scale_nodegroup_asg.asl.json"
   }
+
+  # Naming: pascal = "EKS-ManageStorage", kebab = "eks-manage-storage"
+  sfn_names = {
+    for k, v in local.step_functions : k => (
+      var.naming_convention == "pascal"
+      ? "${var.prefix}-EKS-${replace(title(replace(k, "_", " ")), " ", "")}"
+      : "${var.prefix}-eks-${replace(k, "_", "-")}"
+    )
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -20,7 +29,7 @@ locals {
 resource "aws_sfn_state_machine" "eks" {
   for_each = local.step_functions
 
-  name     = "${var.prefix}-EKS-${replace(title(replace(each.key, "_", " ")), " ", "")}"
+  name     = local.sfn_names[each.key]
   role_arn = var.orchestrator_role_arn
 
   definition = file("${path.module}/${each.value}")
@@ -37,7 +46,7 @@ resource "aws_sfn_state_machine" "eks" {
 
   tags = merge(var.tags, {
     Module = "eks"
-    Name   = "${var.prefix}-EKS-${each.key}"
+    Name   = local.sfn_names[each.key]
   })
 }
 

@@ -18,6 +18,15 @@ locals {
     # Notifications
     notify = "notify.asl.json"
   }
+
+  # Naming: pascal = "Utils-Notify", kebab = "utils-notify"
+  sfn_names = {
+    for k, v in local.step_functions : k => (
+      var.naming_convention == "pascal"
+      ? "${var.prefix}-Utils-${replace(title(replace(k, "_", " ")), " ", "")}"
+      : "${var.prefix}-utils-${replace(k, "_", "-")}"
+    )
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -27,7 +36,7 @@ locals {
 resource "aws_sfn_state_machine" "utils" {
   for_each = local.step_functions
 
-  name     = "${var.prefix}-Utils-${replace(title(replace(each.key, "_", " ")), " ", "")}"
+  name     = local.sfn_names[each.key]
   role_arn = var.orchestrator_role_arn
 
   definition = file("${path.module}/${each.value}")
@@ -44,7 +53,7 @@ resource "aws_sfn_state_machine" "utils" {
 
   tags = merge(var.tags, {
     Module = "utils"
-    Name   = "${var.prefix}-Utils-${each.key}"
+    Name   = local.sfn_names[each.key]
   })
 }
 

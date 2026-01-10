@@ -31,3 +31,14 @@ variable "enable_xray_tracing" {
   type        = bool
   default     = false
 }
+
+variable "naming_convention" {
+  description = "Naming convention for resources: 'pascal' (DB-RestoreCluster) or 'kebab' (db-restore-cluster)"
+  type        = string
+  default     = "pascal"
+
+  validation {
+    condition     = contains(["pascal", "kebab"], var.naming_convention)
+    error_message = "naming_convention must be 'pascal' or 'kebab'"
+  }
+}

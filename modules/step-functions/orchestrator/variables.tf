@@ -32,6 +32,17 @@ variable "enable_xray_tracing" {
   default     = false
 }
 
+variable "naming_convention" {
+  description = "Naming convention for resources: 'pascal' (Orchestrator-RefreshOrchestrator) or 'kebab' (orchestrator-refresh-orchestrator)"
+  type        = string
+  default     = "pascal"
+
+  validation {
+    condition     = contains(["pascal", "kebab"], var.naming_convention)
+    error_message = "naming_convention must be 'pascal' or 'kebab'"
+  }
+}
+
 # -----------------------------------------------------------------------------
 # Step Function ARNs from other modules
 # -----------------------------------------------------------------------------

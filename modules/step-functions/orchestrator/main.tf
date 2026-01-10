@@ -7,6 +7,15 @@ locals {
   step_functions = {
     refresh_orchestrator = "refresh_orchestrator.asl.json"
   }
+
+  # Naming: pascal = "Orchestrator-RefreshOrchestrator", kebab = "orchestrator-refresh-orchestrator"
+  sfn_names = {
+    for k, v in local.step_functions : k => (
+      var.naming_convention == "pascal"
+      ? "${var.prefix}-Orchestrator-${replace(title(replace(k, "_", " ")), " ", "")}"
+      : "${var.prefix}-orchestrator-${replace(k, "_", "-")}"
+    )
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -16,7 +25,7 @@ locals {
 resource "aws_sfn_state_machine" "orchestrator" {
   for_each = local.step_functions
 
-  name     = "${var.prefix}-Orchestrator-${replace(title(replace(each.key, "_", " ")), " ", "")}"
+  name     = local.sfn_names[each.key]
   role_arn = var.orchestrator_role_arn
 
   definition = templatefile("${path.module}/${each.value}", {
@@ -39,7 +48,7 @@ resource "aws_sfn_state_machine" "orchestrator" {
 
   tags = merge(var.tags, {
     Module = "orchestrator"
-    Name   = "${var.prefix}-Orchestrator-${each.key}"
+    Name   = local.sfn_names[each.key]
   })
 }
 

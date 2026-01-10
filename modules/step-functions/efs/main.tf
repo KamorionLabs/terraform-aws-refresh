@@ -17,6 +17,15 @@ locals {
     setup_cross_account_replication = "setup_cross_account_replication.asl.json"
     check_replication_sync          = "check_replication_sync.asl.json"
   }
+
+  # Naming: pascal = "EFS-RestoreFromBackup", kebab = "efs-restore-from-backup"
+  sfn_names = {
+    for k, v in local.step_functions : k => (
+      var.naming_convention == "pascal"
+      ? "${var.prefix}-EFS-${replace(title(replace(k, "_", " ")), " ", "")}"
+      : "${var.prefix}-efs-${replace(k, "_", "-")}"
+    )
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -26,7 +35,7 @@ locals {
 resource "aws_sfn_state_machine" "efs" {
   for_each = local.step_functions
 
-  name     = "${var.prefix}-EFS-${replace(title(replace(each.key, "_", " ")), " ", "")}"
+  name     = local.sfn_names[each.key]
   role_arn = var.orchestrator_role_arn
 
   definition = file("${path.module}/${each.value}")
@@ -43,7 +52,7 @@ resource "aws_sfn_state_machine" "efs" {
 
   tags = merge(var.tags, {
     Module = "efs"
-    Name   = "${var.prefix}-EFS-${each.key}"
+    Name   = local.sfn_names[each.key]
   })
 }
 

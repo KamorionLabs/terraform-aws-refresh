@@ -34,6 +34,16 @@ locals {
     run_mysqldump_on_eks   = "run_mysqldump_on_eks.asl.json"
     run_mysqlimport_on_eks = "run_mysqlimport_on_eks.asl.json"
   }
+
+  # Naming: pascal = "DB-RestoreCluster", kebab = "db-restore-cluster"
+  category = var.naming_convention == "pascal" ? "DB" : "db"
+  sfn_names = {
+    for k, v in local.step_functions : k => (
+      var.naming_convention == "pascal"
+      ? "${var.prefix}-DB-${replace(title(replace(k, "_", " ")), " ", "")}"
+      : "${var.prefix}-db-${replace(k, "_", "-")}"
+    )
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -43,7 +53,7 @@ locals {
 resource "aws_sfn_state_machine" "db" {
   for_each = local.step_functions
 
-  name     = "${var.prefix}-DB-${replace(title(replace(each.key, "_", " ")), " ", "")}"
+  name     = local.sfn_names[each.key]
   role_arn = var.orchestrator_role_arn
 
   definition = file("${path.module}/${each.value}")
@@ -60,7 +70,7 @@ resource "aws_sfn_state_machine" "db" {
 
   tags = merge(var.tags, {
     Module = "database"
-    Name   = "${var.prefix}-DB-${each.key}"
+    Name   = local.sfn_names[each.key]
   })
 }
 
